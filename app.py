@@ -23,6 +23,7 @@ from pages.frontdesk_page import FrontDeskPage
 from pages.finance_page import FinancePage
 from pages.maintenance_page import MaintenancePage
 import mock_data as data
+from database.db_service import authenticate_user
 
 # Map db role codes to display role names used by sidebar / ROLE_PAGE_INDEX
 _ROLE_DISPLAY = {
@@ -125,6 +126,9 @@ class LoginWindow(QWidget):
 
         outer.addWidget(card)
 
+
+
+    # ── Login method ──────────────────────────────────────────────────────────────
     def login(self):
         """Authenticate against the database and route to role dashboard."""
         username = self.username.text().strip()
@@ -138,18 +142,10 @@ class LoginWindow(QWidget):
                 display_role = _ROLE_DISPLAY.get(user["role"], user["role"])
                 self.main_app.current_user = dict(user)
                 self.main_app.switch_to_role(display_role)
-            return
-
-        # Fallback to mock data for non-finance roles that aren't in the DB yet
-        mock_user = data.USERS.get(username)
-        if mock_user and mock_user["password"] == password:
-            self.error_label.setVisible(False)
-            if self.main_app:
-                self.main_app.current_user = None
-                self.main_app.switch_to_role(mock_user["role"])
         else:
             self.error_label.setText("Invalid username or password")
             self.error_label.setVisible(True)
+        
 
     def clear_fields(self):
         """Reset the login form."""
