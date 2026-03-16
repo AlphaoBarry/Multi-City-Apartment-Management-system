@@ -6,19 +6,31 @@ Covers FR-3.x: Invoicing, Payment Tracking, Arrears Alerts, Expense Management, 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFrame, QGridLayout, QTableWidget,
                               QTableWidgetItem, QHeaderView, QPushButton,
-                              QScrollArea, QComboBox)
+                              QScrollArea, QComboBox, QMessageBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from components.sidebar import Sidebar
-import mock_data as data
+from database.db_service import (get_invoices, get_overdue_invoices,
+                                  get_dashboard_stats, record_payment,
+                                  get_expenses, record_expense)
 
 
 class FinancePage(QWidget):
     """Finance Manager dashboard — index 4 in MainApp stacked widget."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current_user=None):
         super().__init__(parent)
         self.main_app = parent
+        self.current_user_id = current_user["user_id"] if current_user else None
+
+        # Determine display name
+        if current_user:
+            display_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip()
+            if not display_name:
+                display_name = current_user.get("username", "Finance Manager")
+        else:
+            display_name = "Finance Manager"
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -26,7 +38,7 @@ class FinancePage(QWidget):
         # ── Sidebar ──────────────────────────────────────────────────────
         self.sidebar = Sidebar(
             role="Finance Manager",
-            display_name=data.USERS["finance"]["display_name"],
+            display_name=display_name,
         )
         self.sidebar.logout_signal.connect(self._logout)
         self.sidebar.page_changed.connect(self._on_page_changed)
@@ -62,19 +74,19 @@ class FinancePage(QWidget):
 
     # ── Stat Cards ────────────────────────────────────────────────────────
     def _build_stat_cards(self):
-        stats = data.DASHBOARD_STATS["finance"]
+        stats = get_dashboard_stats("Finance Manager")
         card_data = [
-            (str(stats["collected_this_month"]), "Collected This Month", "↑ 15%", "#e67e22", "#e67e22"),
-            (str(stats["pending_payments"]),      "Pending Payments",     "↑ 8%",  "#e74c3c", "#e74c3c"),
-            (str(stats["overdue_payments"]),       "Overdue Payments",     "↑ 3%",  "#27ae60", "#27ae60"),
-            (str(stats["active_invoices"]),        "Active Invoices",      "↑ 12%", "#3498db", "#3498db"),
+            (str(stats.get("Rent Collected", "£0")),   "Rent Collected",   "↑ 15%", "#e67e22", "#e67e22"),
+            (str(stats.get("Pending Invoices", 0)),     "Pending Invoices", "↑ 8%",  "#e74c3c", "#e74c3c"),
+            (str(stats.get("Overdue Invoices", 0)),     "Overdue Invoices", "↑ 3%",  "#27ae60", "#27ae60"),
+            (str(stats.get("Expenses", "£0")),          "Expenses",         "↑ 12%", "#3498db", "#3498db"),
         ]
-        grid = QGridLayout()
-        grid.setSpacing(12)
+        self.stat_grid = QGridLayout()
+        self.stat_grid.setSpacing(12)
         for i, (value, label, change, accent, top_bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, top_bar)
-            grid.addWidget(card, 0, i)
-        self.content_layout.addLayout(grid)
+            self.stat_grid.addWidget(card, 0, i)
+        self.content_layout.addLayout(self.stat_grid)
 
     def _stat_card(self, value, label, change, top_bar_color):
         card = QFrame()
@@ -113,10 +125,37 @@ class FinancePage(QWidget):
             "stop:0 #6c5ce7, stop:1 #0984e3); color: white; border-radius: 18px; "
             "padding: 8px 18px; font-weight: bold; font-size: 12px; border: none; }"
         )
+        btn.clicked.connect(self._on_record_payment)
         header_row.addWidget(lbl)
         header_row.addStretch()
         header_row.addWidget(btn)
         self.content_layout.addLayout(header_row)
+
+    def _on_record_payment(self):
+        """Record payment for the first pending/overdue invoice in the table."""
+        invoices = get_invoices()
+        unpaid = [inv for inv in invoices if inv["status"] in ("pending", "overdue")]
+        if not unpaid:
+            QMessageBox.information(self, "No Pending Invoices",
+                                    "There are no pending or overdue invoices.")
+            return
+
+        inv = unpaid[0]
+        receipt = record_payment(
+            invoice_id=inv["invoice_id"],
+            lease_id=inv["lease_id"],
+            tenant_id=inv["tenant_id"],
+            amount=inv["amount_due"],
+            method="transfer",
+            recorded_by=self.current_user_id,
+        )
+        if receipt:
+            QMessageBox.information(self, "Payment Recorded",
+                                    f"Payment recorded successfully.\nReceipt: {receipt}")
+        else:
+            QMessageBox.critical(self, "Payment Error",
+                                 "Failed to record payment. Please try again.")
+        self._refresh_payments_table()
 
     # ── Recent Payments Table ─────────────────────────────────────────────
     def _build_payments_table(self):
@@ -134,30 +173,35 @@ class FinancePage(QWidget):
         sub_header.addWidget(combo)
         self.content_layout.addLayout(sub_header)
 
-        cols = ["INVOICE ID", "TENANT", "APARTMENT", "AMOUNT", "DUE DATE", "STATUS", "ACTIONS"]
-        table = QTableWidget(len(data.INVOICES), len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setFixedHeight(min(40 * len(data.INVOICES) + 36, 220))
-        table.setStyleSheet(self._table_style())
+        self.payments_table = QTableWidget()
+        self.payments_table.setStyleSheet(self._table_style())
+        self.content_layout.addWidget(self.payments_table)
+        self._refresh_payments_table()
 
-        status_colors = {"Paid": "#27ae60", "Pending": "#e67e22", "Overdue": "#e74c3c"}
-        action_map = {"Paid": "View   Receipt", "Pending": "View   Remind", "Overdue": "View   Send Notice"}
+    def _refresh_payments_table(self):
+        invoices = get_invoices()
+        cols = ["INVOICE ID", "TENANT", "AMOUNT", "DUE DATE", "STATUS", "ACTIONS"]
+        self.payments_table.setColumnCount(len(cols))
+        self.payments_table.setRowCount(len(invoices))
+        self.payments_table.setHorizontalHeaderLabels(cols)
+        self.payments_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.payments_table.verticalHeader().setVisible(False)
+        self.payments_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.payments_table.setFixedHeight(min(40 * len(invoices) + 36, 220))
 
-        for r, inv in enumerate(data.INVOICES):
-            table.setItem(r, 0, QTableWidgetItem(inv["id"]))
-            table.setItem(r, 1, QTableWidgetItem(inv["tenant"]))
-            table.setItem(r, 2, QTableWidgetItem(inv["apartment"]))
-            table.setItem(r, 3, QTableWidgetItem(inv["amount"]))
-            table.setItem(r, 4, QTableWidgetItem(inv["due_date"]))
-            status_item = QTableWidgetItem(f"● {inv['status']}")
-            status_item.setForeground(QColor(status_colors.get(inv["status"], "#718096")))
-            table.setItem(r, 5, status_item)
-            table.setItem(r, 6, QTableWidgetItem(action_map.get(inv["status"], "View")))
+        status_colors = {"paid": "#27ae60", "pending": "#e67e22", "overdue": "#e74c3c"}
+        action_map = {"paid": "View   Receipt", "pending": "View   Remind", "overdue": "View   Send Notice"}
 
-        self.content_layout.addWidget(table)
+        for r, inv in enumerate(invoices):
+            self.payments_table.setItem(r, 0, QTableWidgetItem(str(inv["invoice_id"])[:16]))
+            self.payments_table.setItem(r, 1, QTableWidgetItem(inv["tenant_name"]))
+            self.payments_table.setItem(r, 2, QTableWidgetItem(f"£{inv['amount_due']:,.2f}"))
+            self.payments_table.setItem(r, 3, QTableWidgetItem(str(inv["due_date"])))
+            status = inv["status"]
+            status_item = QTableWidgetItem(f"● {status.capitalize()}")
+            status_item.setForeground(QColor(status_colors.get(status, "#718096")))
+            self.payments_table.setItem(r, 4, status_item)
+            self.payments_table.setItem(r, 5, QTableWidgetItem(action_map.get(status, "View")))
 
     # ── Financial Reports Section ─────────────────────────────────────────
     def _build_financial_reports(self):

@@ -1,1 +1,21 @@
-PyQt5
+# PAMS — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# GUI
+PyQt5==5.15.10
+
+# Password hashing (upgrade from SHA-256 for production)
+bcrypt==4.1.2
+
+# PDF report generation (FR-5.1)
+reportlab==4.1.0
+
+# Data export (FR-5.3)
+openpyxl==3.1.2
+
+# Testing
+pytest==8.1.1
+pytest-cov==5.0.0
+
+# Utilities
+python-dotenv==1.0.1
