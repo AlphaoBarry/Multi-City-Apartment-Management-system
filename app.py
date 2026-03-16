@@ -10,6 +10,12 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout, QH
 from PyQt5.QtCore import Qt
 import sys
 
+# ── Database bootstrap ────────────────────────────────────────────────────────
+from database.connection import init_db
+from database.db_service import authenticate_user
+
+init_db()
+
 # ── Page imports ──────────────────────────────────────────────────────────────
 from pages.admin_page import AdminPage
 from pages.manager_page import ManagerPage
@@ -17,6 +23,15 @@ from pages.frontdesk_page import FrontDeskPage
 from pages.finance_page import FinancePage
 from pages.maintenance_page import MaintenancePage
 import mock_data as data
+
+# Map db role codes to display role names used by sidebar / ROLE_PAGE_INDEX
+_ROLE_DISPLAY = {
+    "admin": "Administrator",
+    "manager": "Manager",
+    "front_desk": "Front-Desk Staff",
+    "finance": "Finance Manager",
+    "maintenance": "Maintenance Staff",
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -111,15 +126,27 @@ class LoginWindow(QWidget):
         outer.addWidget(card)
 
     def login(self):
-        """Authenticate against mock_data.USERS and route to role dashboard."""
+        """Authenticate against the database and route to role dashboard."""
         username = self.username.text().strip()
         password = self.password.text()
 
-        user = data.USERS.get(username)
-        if user and user["password"] == password:
+        # Try real DB authentication first
+        user = authenticate_user(username, password)
+        if user:
             self.error_label.setVisible(False)
             if self.main_app:
-                self.main_app.switch_to_role(user["role"])
+                display_role = _ROLE_DISPLAY.get(user["role"], user["role"])
+                self.main_app.current_user = dict(user)
+                self.main_app.switch_to_role(display_role)
+            return
+
+        # Fallback to mock data for non-finance roles that aren't in the DB yet
+        mock_user = data.USERS.get(username)
+        if mock_user and mock_user["password"] == password:
+            self.error_label.setVisible(False)
+            if self.main_app:
+                self.main_app.current_user = None
+                self.main_app.switch_to_role(mock_user["role"])
         else:
             self.error_label.setText("Invalid username or password")
             self.error_label.setVisible(True)
@@ -160,6 +187,7 @@ class MainApp(QMainWindow):
         self.setWindowTitle("PAMS — Property & Apartment Management System")
         self.resize(1200, 750)
         self.setStyleSheet("background-color: #f0f2f5;")
+        self.current_user = None
 
         # Central widget
         central = QWidget()
@@ -188,7 +216,7 @@ class MainApp(QMainWindow):
         self.frontdesk_page = FrontDeskPage(parent=self)
         self.stacked_widget.addWidget(self.frontdesk_page)
 
-        # Index 4 — Finance Manager
+        # Index 4 — Finance Manager (placeholder — rebuilt on login with current_user)
         self.finance_page = FinancePage(parent=self)
         self.stacked_widget.addWidget(self.finance_page)
 
@@ -201,11 +229,20 @@ class MainApp(QMainWindow):
 
     def switch_to_role(self, role: str):
         """Switch to the dashboard page for the given role."""
+        # Rebuild FinancePage with fresh data and current_user on every login
+        if role == "Finance Manager":
+            old = self.finance_page
+            self.finance_page = FinancePage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(4, self.finance_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
         index = ROLE_PAGE_INDEX.get(role, 0)
         self.stacked_widget.setCurrentIndex(index)
 
     def logout(self):
         """Return to the login screen and clear form fields."""
+        self.current_user = None
         self.login_page.clear_fields()
         self.stacked_widget.setCurrentIndex(0)
 
