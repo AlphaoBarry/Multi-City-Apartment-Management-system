@@ -6,8 +6,14 @@ Run this once after init_db() to populate the database with realistic test data.
 """
 
 import hashlib
+import os
+import sys
 import uuid
 from datetime import date, datetime
+
+# Ensure the project root is on sys.path so "database" resolves as a package
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from database.connection import get_db
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -68,7 +74,6 @@ def seed():
             (nid(), london_id,  "one_bed",   5, 1600.00, "occupied"),
             (nid(), london_id,  "two_bed",   7, 2200.00, "available"),
         ]
-        apt_ids = [a[0] for a in apts]
         conn.executemany(
             """INSERT OR IGNORE INTO apartments
                (apt_id, city_id, room_type, floor_number, monthly_rent, status)
@@ -76,13 +81,16 @@ def seed():
             apts
         )
 
+        # Fetch actual apartment IDs from DB (INSERT OR IGNORE may have skipped new UUIDs)
+        apt_rows = conn.execute("SELECT apt_id FROM apartments ORDER BY rowid").fetchall()
+        apt_ids = [r["apt_id"] for r in apt_rows]
+
         # 4. Tenants
         tenants = [
             (nid(), "Marcus",  "Adeyemi",  "AB123456C", "marcus.a@email.com",  "07700900001", "Consultant"),
             (nid(), "Priya",   "Sharma",   "CD234567D", "priya.s@email.com",   "07700900002", "Engineer"),
             (nid(), "Jamie",   "Thompson", "EF345678E", "jamie.t@email.com",   "07700900003", "Teacher"),
         ]
-        tenant_ids = [t[0] for t in tenants]
         conn.executemany(
             """INSERT OR IGNORE INTO tenants
                (tenant_id, first_name, last_name, ni_number, email, phone, occupation)
@@ -90,12 +98,15 @@ def seed():
             tenants
         )
 
+        # Fetch actual tenant IDs from DB
+        tenant_rows = conn.execute("SELECT tenant_id FROM tenants ORDER BY rowid").fetchall()
+        tenant_ids = [r["tenant_id"] for r in tenant_rows]
+
         # 5. Leases
         leases = [
             (nid(), tenant_ids[0], apt_ids[1], "2025-01-01", "2026-01-01", 1400.00, "active"),
             (nid(), tenant_ids[1], apt_ids[4], "2025-03-01", "2026-03-01", 1600.00, "active"),
         ]
-        lease_ids = [l[0] for l in leases]
         conn.executemany(
             """INSERT OR IGNORE INTO leases
                (lease_id, tenant_id, apt_id, start_date, end_date, rent_amount, status)
@@ -103,12 +114,15 @@ def seed():
             leases
         )
 
+        # Fetch actual lease IDs from DB
+        lease_rows = conn.execute("SELECT lease_id FROM leases ORDER BY rowid").fetchall()
+        lease_ids = [r["lease_id"] for r in lease_rows]
+
         # 6. Invoices
         invoices = [
             (nid(), lease_ids[0], tenant_ids[0], 1400.00, "2026-03-01", "overdue"),
             (nid(), lease_ids[1], tenant_ids[1], 1600.00, "2026-03-01", "pending"),
         ]
-        invoice_ids = [i[0] for i in invoices]
         conn.executemany(
             """INSERT OR IGNORE INTO invoices
                (invoice_id, lease_id, tenant_id, amount_due, due_date, status)
@@ -124,9 +138,9 @@ def seed():
             (nid(), apt_ids[3], "Boiler not heating — tenants reporting cold water", "high", "open")
         )
 
-        print("✅ PAMS database seeded successfully.")
-        print(f"   Cities: {len(cities)} | Users: {len(users)} | Apts: {len(apts)}")
-        print(f"   Tenants: {len(tenants)} | Leases: {len(leases)} | Invoices: {len(invoices)}")
+        print("[OK] PAMS database seeded successfully.")
+        print(f"   Cities: {len(cities)} | Users: {len(users)} | Apts: {len(apt_ids)}")
+        print(f"   Tenants: {len(tenant_ids)} | Leases: {len(lease_ids)} | Invoices: {len(invoices)}")
 
 
 if __name__ == "__main__":
