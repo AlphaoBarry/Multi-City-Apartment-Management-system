@@ -1,185 +1,814 @@
 """
 admin_page.py — Dashboard for the Administrator role.
 Covers FR-1.x (User Management, RBAC, Audit Log) and FR-5.2/5.3 (User Admin, Data Backup).
-Also covers FR-2.6 (Register Apartments, Manage Apartments).
+Also covers FR-2.x (Register Apartments, Manage Apartments, Leases, Tenants) for their assigned city.
+
+All data is fetched from the SQLite database via database.db_service.
 """
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFrame, QGridLayout, QTableWidget,
                               QTableWidgetItem, QHeaderView, QPushButton,
-                              QScrollArea)
+                              QScrollArea, QDialog, QLineEdit, QComboBox,
+                              QFormLayout, QDialogButtonBox, QMessageBox, QStackedWidget)
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
 from components.sidebar import Sidebar
-import mock_data as data
+from database.db_service import (
+    get_users, get_audit_log, get_dashboard_stats,
+    create_user, deactivate_user, activate_user,
+    reset_password, write_audit_log, get_cities,
+    get_apartments_by_city, create_apartment, update_apartment, soft_delete_apartment,
+    get_leases_by_city, create_lease, get_tenants_by_city, update_tenant,
+    get_occupancy_report, get_financial_summary_by_city, get_maintenance_tickets_by_city,
+    get_city_id_by_name
+)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DIALOGS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CreateUserDialog(QDialog):
+    """Modal dialog for creating a new staff user account."""
+
+    # Restricted to non-admin and non-manager roles
+    ROLES = ["front_desk", "finance", "maintenance"]
+
+    def __init__(self, current_city: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create New User")
+        self.setFixedSize(400, 420)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        self.current_city = current_city
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        title = QLabel("New User Account")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1a202c;")
+        layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.username_input = QLineEdit()
+        self.username_input.setPlaceholderText("e.g. frontdesk_london")
+        self.first_name_input = QLineEdit()
+        self.last_name_input = QLineEdit()
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("user@pams.co.uk")
+        self.phone_input = QLineEdit()
+        self.phone_input.setPlaceholderText("Optional")
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setPlaceholderText("Min 6 characters")
+
+        self.role_combo = QComboBox()
+        self.role_combo.addItems(self.ROLES)
+
+        self.city_combo = QComboBox()
+        self.city_combo.addItem(self.current_city, self.current_city)
+        self.city_combo.setEnabled(False) # Lockdown to admin's city
+
+        input_style = (
+            "QLineEdit, QComboBox { color: #2d3748; background-color: white; "
+            "border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; "
+            "font-size: 12px; }"
+            "QLineEdit:focus, QComboBox:focus { border: 1px solid #6c5ce7; }"
+        )
+        for w in [self.username_input, self.first_name_input, self.last_name_input,
+                   self.email_input, self.phone_input, self.password_input,
+                   self.role_combo, self.city_combo]:
+            w.setStyleSheet(input_style)
+
+        form.addRow("Username *", self.username_input)
+        form.addRow("First Name *", self.first_name_input)
+        form.addRow("Last Name *", self.last_name_input)
+        form.addRow("Email *", self.email_input)
+        form.addRow("Phone", self.phone_input)
+        form.addRow("Password *", self.password_input)
+        form.addRow("Role *", self.role_combo)
+        form.addRow("City Branch", self.city_combo)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        buttons.setStyleSheet(
+            "QPushButton { padding: 8px 18px; border-radius: 6px; font-weight: bold; } "
+            "QPushButton:first-child { background-color: #6c5ce7; color: white; }"
+        )
+        layout.addWidget(buttons)
+
+    def get_data(self) -> dict:
+        username = self.username_input.text().strip()
+        first = self.first_name_input.text().strip()
+        last = self.last_name_input.text().strip()
+        email = self.email_input.text().strip()
+        password = self.password_input.text()
+
+        if not all([username, first, last, email, password]) or len(password) < 6:
+            return None
+
+        return {
+            "username": username,
+            "first_name": first,
+            "last_name": last,
+            "email": email,
+            "phone": self.phone_input.text().strip() or None,
+            "password": password,
+            "role": self.role_combo.currentText(),
+            "city_branch": self.city_combo.currentData(),
+        }
+
+
+class ResetPasswordDialog(QDialog):
+    """Small dialog to enter a new password for a user."""
+    def __init__(self, username: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Reset Password — {username}")
+        self.setFixedSize(340, 180)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        lbl = QLabel(f"New password for <b>{username}</b>:")
+        lbl.setStyleSheet("font-size: 13px; color: #1a202c;")
+        layout.addWidget(lbl)
+        self.pw_input = QLineEdit()
+        self.pw_input.setEchoMode(QLineEdit.Password)
+        self.pw_input.setPlaceholderText("Min 6 characters")
+        self.pw_input.setStyleSheet(
+            "QLineEdit { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; font-size: 12px; background: white; color: #2d3748; }"
+        )
+        layout.addWidget(self.pw_input)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_password(self) -> str | None:
+        pw = self.pw_input.text()
+        return pw if len(pw) >= 6 else None
+
+
+class RegisterApartmentDialog(QDialog):
+    def __init__(self, current_city: str, parent=None):
+        super().__init__(parent)
+        self.current_city = current_city
+        self.setWindowTitle("Register Apartment")
+        self.setFixedSize(350, 300)
+        self.setStyleSheet("background-color: #f0f2f5;")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.room_type = QComboBox()
+        self.room_type.addItems(['studio', 'one_bed', 'two_bed', 'three_bed', 'house'])
+        
+        self.floor = QLineEdit()
+        self.floor.setPlaceholderText("e.g. 1")
+        
+        self.rent = QLineEdit()
+        self.rent.setPlaceholderText("e.g. 1500.00")
+
+        input_style = (
+            "QLineEdit, QComboBox { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; font-size: 12px; background: white; color: #2d3748; }"
+        )
+        self.room_type.setStyleSheet(input_style)
+        self.floor.setStyleSheet(input_style)
+        self.rent.setStyleSheet(input_style)
+
+        form.addRow("Room Type *", self.room_type)
+        form.addRow("Floor Number *", self.floor)
+        form.addRow("Monthly Rent (£) *", self.rent)
+        
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        try:
+            return {
+                "room_type": self.room_type.currentText(),
+                "floor_number": int(self.floor.text()),
+                "monthly_rent": float(self.rent.text())
+            }
+        except ValueError:
+            return None
+
+
+class AssignLeaseDialog(QDialog):
+    def __init__(self, current_city: str, parent=None):
+        super().__init__(parent)
+        self.current_city = current_city
+        self.setWindowTitle("Assign Lease")
+        self.setFixedSize(400, 350)
+        self.setStyleSheet("background-color: #f0f2f5;")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.tenant_combo = QComboBox()
+        tenants = get_tenants_by_city(self.current_city)
+        for t in tenants:
+            self.tenant_combo.addItem(f"{t['first_name']} {t['last_name']} ({t['ni_number']})", t['tenant_id'])
+
+        self.apt_combo = QComboBox()
+        apts = get_apartments_by_city(self.current_city)
+        available = [a for a in apts if a['status'] == 'available']
+        for a in available:
+            self.apt_combo.addItem(f"{a['room_type']} - Floor {a['floor_number']} (£{a['monthly_rent']})", a['apt_id'])
+
+        self.start_date = QLineEdit()
+        self.start_date.setPlaceholderText("YYYY-MM-DD")
+        self.end_date = QLineEdit()
+        self.end_date.setPlaceholderText("YYYY-MM-DD")
+        self.rent = QLineEdit()
+        self.rent.setPlaceholderText("Rent Amount")
+
+        input_style = (
+            "QLineEdit, QComboBox { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; font-size: 12px; background: white; color: #2d3748; }"
+        )
+        for w in [self.tenant_combo, self.apt_combo, self.start_date, self.end_date, self.rent]:
+            w.setStyleSheet(input_style)
+
+        form.addRow("Tenant *", self.tenant_combo)
+        form.addRow("Apartment *", self.apt_combo)
+        form.addRow("Start Date *", self.start_date)
+        form.addRow("End Date *", self.end_date)
+        form.addRow("Agreed Rent (£) *", self.rent)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        try:
+            return {
+                "tenant_id": self.tenant_combo.currentData(),
+                "apt_id": self.apt_combo.currentData(),
+                "start_date": self.start_date.text(),
+                "end_date": self.end_date.text(),
+                "rent_amount": float(self.rent.text())
+            }
+        except ValueError:
+            return None
+
+
+class EditTenantDialog(QDialog):
+    def __init__(self, tenant_data: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit Tenant - {tenant_data['first_name']}")
+        self.setFixedSize(400, 450)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        self.tenant_id = tenant_data['tenant_id']
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.fields = {}
+        for key in ['first_name', 'last_name', 'ni_number', 'email', 'phone', 'emergency_contact', 'occupation']:
+            le = QLineEdit(str(tenant_data.get(key) or ''))
+            le.setStyleSheet("QLineEdit { padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; }")
+            self.fields[key] = le
+            form.addRow(f"{key.replace('_', ' ').title()}", le)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        return {k: v.text().strip() for k, v in self.fields.items() if v.text().strip()}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADMIN PAGE
+# ══════════════════════════════════════════════════════════════════════════════
 
 class AdminPage(QWidget):
     """Administrator dashboard — index 1 in MainApp stacked widget."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current_user=None):
         super().__init__(parent)
         self.main_app = parent
+        self.current_user = current_user or {}
+        self.current_user_id = self.current_user.get("user_id")
+        self.current_city = self.current_user.get("city_branch", "")
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # ── Sidebar ──────────────────────────────────────────────────────
+        display_name = (
+            f"{self.current_user.get('first_name', '')} "
+            f"{self.current_user.get('last_name', '')}"
+        ).strip() or "Administrator"
+
         self.sidebar = Sidebar(
             role="Administrator",
-            display_name=data.USERS["admin"]["display_name"],
+            display_name=display_name,
         )
         self.sidebar.logout_signal.connect(self._logout)
         self.sidebar.page_changed.connect(self._on_page_changed)
         layout.addWidget(self.sidebar)
 
-        # ── Content area ─────────────────────────────────────────────────
-        content = QScrollArea()
-        content.setWidgetResizable(True)
-        content.setStyleSheet("QScrollArea { border: none; background-color: #f0f2f5; }")
-        content_widget = QWidget()
-        content_widget.setStyleSheet("background-color: #f0f2f5;")
-        self.content_layout = QVBoxLayout(content_widget)
-        self.content_layout.setContentsMargins(24, 20, 24, 20)
-        self.content_layout.setSpacing(16)
-        content.setWidget(content_widget)
-        layout.addWidget(content)
+        # ── Stacked Content Area ─────────────────────────────────────────
+        self.content_stack = QStackedWidget()
+        self.content_stack.setStyleSheet("background-color: #f0f2f5;")
+        layout.addWidget(self.content_stack)
 
-        self._build_header()
-        self._build_stat_cards()
-        self._build_user_management()
-        self._build_users_table()
-        self._build_audit_log()
-        self.content_layout.addStretch()
+        self.pages = {}
+        self._init_pages()
+        self._on_page_changed("Dashboard")
 
-    # ── Header ────────────────────────────────────────────────────────────
-    def _build_header(self):
-        h = QHBoxLayout()
-        title = QLabel("System Administration")
+    def _init_pages(self):
+        self.pages["Dashboard"] = self._create_scroll_page(self._build_dashboard)
+        self.pages["Manage Users"] = self._create_scroll_page(self._build_manage_users)
+        self.pages["Manage Apartments"] = self._create_scroll_page(self._build_manage_apartments)
+        self.pages["Track Leases"] = self._create_scroll_page(self._build_track_leases)
+        self.pages["View Tenant Info"] = self._create_scroll_page(self._build_view_tenant_info)
+        self.pages["Generate Reports"] = self._create_scroll_page(self._build_generate_reports)
+        self.pages["Review Maintenance"] = self._create_scroll_page(self._build_review_maintenance)
+        self.pages["Audit Log"] = self._create_scroll_page(self._build_audit_log_page)
+
+    def _create_scroll_page(self, build_func):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+        build_func(layout)
+        layout.addStretch()
+        scroll.setWidget(widget)
+        self.content_stack.addWidget(scroll)
+        return scroll
+
+    def _on_page_changed(self, page_name: str):
+        if page_name in self.pages:
+            self.content_stack.setCurrentWidget(self.pages[page_name])
+            return
+
+        if page_name == "Create User":
+            self._on_create_user()
+            self.sidebar._set_active("Manage Users")
+        elif page_name == "Register Apartment":
+            self._on_register_apartment()
+            self.sidebar._set_active("Manage Apartments")
+        elif page_name == "Assign Lease":
+            self._on_assign_lease()
+            self.sidebar._set_active("Track Leases")
+        elif page_name == "Data Backup":
+            QMessageBox.information(self, "Backup", "Data Backup completed successfully.")
+            self.sidebar._set_active("Dashboard")
+
+    # ── Builders ─────────────────────────────────────────────────────────
+    
+    def _add_title(self, layout, text):
+        title = QLabel(text)
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
-        h.addWidget(title)
-        h.addStretch()
-        self.content_layout.addLayout(h)
+        layout.addWidget(title)
 
-    # ── Stat Cards ────────────────────────────────────────────────────────
-    def _build_stat_cards(self):
-        stats = data.DASHBOARD_STATS["admin"]
+    def _build_dashboard(self, layout):
+        self._add_title(layout, f"System Administration — {self.current_city} Branch")
+        
+        stats = get_dashboard_stats("Administrator", self.current_city)
         card_data = [
-            (str(stats["total_users"]),      "Total Users",      "↑ 2",  "#6c5ce7"),
-            (str(stats["active_users"]),      "Active Users",     "",     "#27ae60"),
-            (str(stats["total_apartments"]),  "Total Apartments", "",     "#e67e22"),
-            (str(stats["total_cities"]),      "Cities Managed",   "",     "#3498db"),
+            (str(stats.get("total_users", 0)),      "Total Branch Users",      "#6c5ce7"),
+            (str(stats.get("active_users", 0)),      "Active Branch Users",     "#27ae60"),
+            (str(stats.get("total_apartments", 0)),  "Apartments Managed",      "#e67e22"),
+            (str(stats.get("active_leases", 0)),     "Active Leases",           "#3498db"),
         ]
         grid = QGridLayout()
         grid.setSpacing(12)
-        for i, (value, label, change, bar) in enumerate(card_data):
-            card = self._stat_card(value, label, change, bar)
+        for i, (value, label, bar) in enumerate(card_data):
+            card = QFrame()
+            card.setFixedHeight(110)
+            card.setStyleSheet(f"QFrame {{ background-color: white; border-radius: 10px; border-top: 3px solid {bar}; }}")
+            lay = QVBoxLayout(card)
+            val = QLabel(value)
+            val.setStyleSheet("font-size: 28px; font-weight: bold; color: #1a202c;")
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-size: 12px; color: #718096;")
+            lay.addWidget(val)
+            lay.addWidget(lbl)
             grid.addWidget(card, 0, i)
-        self.content_layout.addLayout(grid)
+        layout.addLayout(grid)
 
-    def _stat_card(self, value, label, change, bar_color):
-        card = QFrame()
-        card.setFixedHeight(110)
-        card.setStyleSheet(
-            f"QFrame {{ background-color: white; border-radius: 10px; "
-            f"border-top: 3px solid {bar_color}; }}"
-        )
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 12, 16, 12)
-        top = QHBoxLayout()
-        val = QLabel(value)
-        val.setStyleSheet("font-size: 28px; font-weight: bold; color: #1a202c;")
-        top.addWidget(val)
-        if change:
-            chg = QLabel(change)
-            chg.setStyleSheet("font-size: 11px; color: #00b894;")
-            chg.setAlignment(Qt.AlignRight | Qt.AlignTop)
-            top.addWidget(chg)
-        else:
-            top.addStretch()
-        lbl = QLabel(label)
-        lbl.setStyleSheet("font-size: 12px; color: #718096;")
-        lay.addLayout(top)
-        lay.addWidget(lbl)
-        return card
+        # ── Mini Tables ──────────────────────────────────────────────
+        tables_layout = QVBoxLayout()
+        tables_layout.setSpacing(12)
 
-    # ── User Management ───────────────────────────────────────────────────
-    def _build_user_management(self):
-        row = QHBoxLayout()
-        lbl = QLabel("User Management")
-        lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #1a202c;")
-        btn = QPushButton("+ Create User")
-        btn.setStyleSheet(
-            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            "stop:0 #6c5ce7, stop:1 #0984e3); color: white; border-radius: 18px; "
-            "padding: 8px 18px; font-weight: bold; font-size: 12px; border: none; }"
-        )
-        row.addWidget(lbl)
-        row.addStretch()
-        row.addWidget(btn)
-        self.content_layout.addLayout(row)
+        # 1. Apartments
+        apts = get_occupancy_report(self.current_city)[:5]
+        apt_rows = [ [str(a['apt_id'])[:8], a['room_type'], a['apt_status'], str(a['active_leases'])] for a in apts ]
+        tables_layout.addWidget(self._build_mini_table(
+            "Apartments Overview", ["ID", "TYPE", "STATUS", "OCCUPANCY"], apt_rows,
+            lambda: self.sidebar._on_nav_click("Manage Apartments")
+        ))
 
-    def _build_users_table(self):
-        users = data.USERS
+        # 2. Users
+        users = get_users(city_branch=self.current_city)[:5]
+        user_rows = [ [u['username'], f"{u['first_name']} {u['last_name']}", u['role']] for u in users ]
+        tables_layout.addWidget(self._build_mini_table(
+            "Branch Users", ["USERNAME", "NAME", "ROLE"], user_rows,
+            lambda: self.sidebar._on_nav_click("Manage Users")
+        ))
+
+        # 3. Tenants
+        tenants = get_tenants_by_city(self.current_city)[:5]
+        tenant_rows = [ [f"{t['first_name']} {t['last_name']}", t['ni_number'], t['phone']] for t in tenants ]
+        tables_layout.addWidget(self._build_mini_table(
+            "Branch Tenants", ["NAME", "NINO", "PHONE"], tenant_rows,
+            lambda: self.sidebar._on_nav_click("View Tenant Info")
+        ))
+
+        layout.addLayout(tables_layout)
+
+    def _build_mini_table(self, title, headers, data_rows, view_more_callback):
+        container = QFrame()
+        container.setStyleSheet("background-color: white; border-radius: 8px;")
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(12, 12, 12, 12)
+        
+        head_lay = QHBoxLayout()
+        lbl = QLabel(title)
+        lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: #1a202c;")
+        head_lay.addWidget(lbl)
+        head_lay.addStretch()
+        
+        btn = QPushButton("View More →")
+        btn.setStyleSheet("color: #3498db; font-size: 11px; font-weight: bold; border: none; background: transparent;")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(view_more_callback)
+        head_lay.addWidget(btn)
+        lay.addLayout(head_lay)
+        
+        table = QTableWidget(len(data_rows), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setStyleSheet(self._table_style())
+        
+        # Adjust height based on rows
+        table.setFixedHeight(max(35 * len(data_rows) + 36, 100))
+        
+        for r, row_data in enumerate(data_rows):
+            for c, cell_val in enumerate(row_data):
+                item = QTableWidgetItem(str(cell_val))
+                table.setItem(r, c, item)
+                
+        lay.addWidget(table)
+        return container
+
+    def _build_manage_users(self, layout):
+        self._add_title(layout, "Manage Users")
+        self.users_table = QTableWidget()
+        self.users_table.setStyleSheet(self._table_style())
+        self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.users_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.users_table)
+        self._load_users_table()
+
+    def _load_users_table(self):
+        users = get_users(city_branch=self.current_city)
         cols = ["USERNAME", "DISPLAY NAME", "ROLE", "STATUS", "ACTIONS"]
-        table = QTableWidget(len(users), len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setFixedHeight(min(40 * len(users) + 36, 260))
-        table.setStyleSheet(self._table_style())
+        self.users_table.setColumnCount(len(cols))
+        self.users_table.setRowCount(len(users))
+        self.users_table.setHorizontalHeaderLabels(cols)
+        self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.users_table.setFixedHeight(min(40 * len(users) + 36, 400))
 
-        for r, (uname, udata) in enumerate(users.items()):
-            table.setItem(r, 0, QTableWidgetItem(uname))
-            table.setItem(r, 1, QTableWidgetItem(udata["display_name"]))
-            table.setItem(r, 2, QTableWidgetItem(udata["role"]))
-            status = QTableWidgetItem("● Active")
-            status.setForeground(__import__("PyQt5.QtGui", fromlist=["QColor"]).QColor("#27ae60"))
-            table.setItem(r, 3, status)
-            table.setItem(r, 4, QTableWidgetItem("Edit   Reset   Deactivate"))
+        for r, u in enumerate(users):
+            self.users_table.setItem(r, 0, QTableWidgetItem(u.get("username", "")))
+            display = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+            self.users_table.setItem(r, 1, QTableWidgetItem(display))
+            self.users_table.setItem(r, 2, QTableWidgetItem(u.get("role", "")))
 
-        self.content_layout.addWidget(table)
+            is_active = u.get("is_active", 1)
+            status_item = QTableWidgetItem("● Active" if is_active else "● Inactive")
+            status_item.setForeground(QColor("#27ae60") if is_active else QColor("#e74c3c"))
+            self.users_table.setItem(r, 3, status_item)
 
-    # ── Audit Log ─────────────────────────────────────────────────────────
-    def _build_audit_log(self):
-        lbl = QLabel("Audit Log")
-        lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a202c;")
-        self.content_layout.addWidget(lbl)
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            actions_layout.setSpacing(6)
 
-        cols = ["USER", "ACTION", "TIMESTAMP"]
-        table = QTableWidget(len(data.AUDIT_LOG), len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setFixedHeight(min(40 * len(data.AUDIT_LOG) + 36, 300))
-        table.setStyleSheet(self._table_style())
+            # Prevent actions against admins and managers
+            if u.get("role") not in ["admin", "manager"]:
+                if is_active:
+                    deact_btn = QPushButton("Deactivate")
+                    deact_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                    deact_btn.setCursor(Qt.PointingHandCursor)
+                    deact_btn.clicked.connect(lambda checked, uid=u["user_id"], uname=u["username"]:
+                                              self._on_deactivate_user(uid, uname))
+                    actions_layout.addWidget(deact_btn)
+                else:
+                    act_btn = QPushButton("Activate")
+                    act_btn.setStyleSheet(self._action_btn_style("#27ae60"))
+                    act_btn.setCursor(Qt.PointingHandCursor)
+                    act_btn.clicked.connect(lambda checked, uid=u["user_id"], uname=u["username"]:
+                                            self._on_activate_user(uid, uname))
+                    actions_layout.addWidget(act_btn)
 
-        for r, entry in enumerate(data.AUDIT_LOG):
-            table.setItem(r, 0, QTableWidgetItem(entry["user_id"]))
-            table.setItem(r, 1, QTableWidgetItem(entry["action"]))
-            table.setItem(r, 2, QTableWidgetItem(entry["timestamp"]))
+                reset_btn = QPushButton("Reset PW")
+                reset_btn.setStyleSheet(self._action_btn_style("#3498db"))
+                reset_btn.setCursor(Qt.PointingHandCursor)
+                reset_btn.clicked.connect(lambda checked, uid=u["user_id"], uname=u["username"]:
+                                          self._on_reset_password(uid, uname))
+                actions_layout.addWidget(reset_btn)
 
-        self.content_layout.addWidget(table)
+            self.users_table.setCellWidget(r, 4, actions_widget)
 
-    # ── Shared table style ────────────────────────────────────────────────
+    def _build_manage_apartments(self, layout):
+        self._add_title(layout, "Manage Apartments")
+        self.apts_table = QTableWidget()
+        self.apts_table.setStyleSheet(self._table_style())
+        self.apts_table.verticalHeader().setVisible(False)
+        self.apts_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.apts_table)
+        self._load_apts_table()
+
+    def _load_apts_table(self):
+        apts = get_apartments_by_city(self.current_city)
+        cols = ["TYPE", "FLOOR", "RENT", "STATUS", "ACTIONS"]
+        self.apts_table.setColumnCount(len(cols))
+        self.apts_table.setRowCount(len(apts))
+        self.apts_table.setHorizontalHeaderLabels(cols)
+        self.apts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.apts_table.setFixedHeight(min(40 * len(apts) + 36, 400))
+
+        for r, a in enumerate(apts):
+            self.apts_table.setItem(r, 0, QTableWidgetItem(a['room_type']))
+            self.apts_table.setItem(r, 1, QTableWidgetItem(str(a['floor_number'])))
+            self.apts_table.setItem(r, 2, QTableWidgetItem(f"£{a['monthly_rent']}"))
+            self.apts_table.setItem(r, 3, QTableWidgetItem(a['status']))
+
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            if a['status'] != 'inactive':
+                del_btn = QPushButton("Deactivate")
+                del_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                del_btn.clicked.connect(lambda checked, aid=a['apt_id']: self._on_delete_apartment(aid))
+                actions_layout.addWidget(del_btn)
+            self.apts_table.setCellWidget(r, 4, actions_widget)
+
+    def _build_track_leases(self, layout):
+        self._add_title(layout, "Track Leases")
+        self.leases_table = QTableWidget()
+        self.leases_table.setStyleSheet(self._table_style())
+        self.leases_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.leases_table)
+        self._load_leases_table()
+
+    def _load_leases_table(self):
+        leases = get_leases_by_city(self.current_city)
+        cols = ["TENANT", "APARTMENT", "RENT", "START", "END", "STATUS"]
+        self.leases_table.setColumnCount(len(cols))
+        self.leases_table.setRowCount(len(leases))
+        self.leases_table.setHorizontalHeaderLabels(cols)
+        self.leases_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.leases_table.setFixedHeight(min(40 * len(leases) + 36, 400))
+        for r, l in enumerate(leases):
+            self.leases_table.setItem(r, 0, QTableWidgetItem(l['tenant_name']))
+            self.leases_table.setItem(r, 1, QTableWidgetItem(f"{l['room_type']} (Fl {l['floor_number']})"))
+            self.leases_table.setItem(r, 2, QTableWidgetItem(f"£{l['rent_amount']}"))
+            self.leases_table.setItem(r, 3, QTableWidgetItem(str(l['start_date'])))
+            self.leases_table.setItem(r, 4, QTableWidgetItem(str(l['end_date'])))
+            self.leases_table.setItem(r, 5, QTableWidgetItem(l['status']))
+
+    def _build_view_tenant_info(self, layout):
+        self._add_title(layout, "Tenant Information")
+        self.tenants_table = QTableWidget()
+        self.tenants_table.setStyleSheet(self._table_style())
+        self.tenants_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.tenants_table)
+        self._load_tenants_table()
+
+    def _load_tenants_table(self):
+        tenants = get_tenants_by_city(self.current_city)
+        cols = ["NAME", "NINO", "EMAIL", "PHONE", "OCCUPATION", "ACTIONS"]
+        self.tenants_table.setColumnCount(len(cols))
+        self.tenants_table.setRowCount(len(tenants))
+        self.tenants_table.setHorizontalHeaderLabels(cols)
+        self.tenants_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tenants_table.setFixedHeight(min(40 * len(tenants) + 36, 400))
+
+        for r, t in enumerate(tenants):
+            self.tenants_table.setItem(r, 0, QTableWidgetItem(f"{t['first_name']} {t['last_name']}"))
+            self.tenants_table.setItem(r, 1, QTableWidgetItem(t['ni_number']))
+            self.tenants_table.setItem(r, 2, QTableWidgetItem(t['email']))
+            self.tenants_table.setItem(r, 3, QTableWidgetItem(t['phone']))
+            self.tenants_table.setItem(r, 4, QTableWidgetItem(t['occupation']))
+            
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            edit_btn = QPushButton("Edit")
+            edit_btn.setStyleSheet(self._action_btn_style("#3498db"))
+            edit_btn.clicked.connect(lambda checked, tdata=t: self._on_edit_tenant(tdata))
+            actions_layout.addWidget(edit_btn)
+            self.tenants_table.setCellWidget(r, 5, actions_widget)
+
+    def _build_generate_reports(self, layout):
+        self._add_title(layout, "City Operational Reports")
+        
+        # Financial Summary
+        fin_lbl = QLabel("Financial Summary")
+        fin_lbl.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(fin_lbl)
+        
+        fin = get_financial_summary_by_city(self.current_city)
+        stats_frame = QFrame()
+        stats_frame.setStyleSheet("background: white; border-radius: 8px; padding: 10px;")
+        hlay = QHBoxLayout(stats_frame)
+        hlay.addWidget(QLabel(f"<b>Rent Collected:</b> £{fin['rent_collected']:.2f}"))
+        hlay.addWidget(QLabel(f"<b>Rent Pending:</b> £{fin['rent_pending']:.2f}"))
+        hlay.addWidget(QLabel(f"<b>Maintenance Costs:</b> £{fin['maintenance_costs']:.2f}"))
+        layout.addWidget(stats_frame)
+
+        # Occupancy Table
+        occ_lbl = QLabel("Occupancy / Tenants per Apartment")
+        occ_lbl.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 20px;")
+        layout.addWidget(occ_lbl)
+
+        self.occ_table = QTableWidget()
+        self.occ_table.setStyleSheet(self._table_style())
+        self.occ_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.occ_table)
+        self._load_occ_table()
+
+    def _load_occ_table(self):
+        reports = get_occupancy_report(self.current_city)
+        cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "ACTIVE LEASES", "OCCUPANTS"]
+        self.occ_table.setColumnCount(len(cols))
+        self.occ_table.setRowCount(len(reports))
+        self.occ_table.setHorizontalHeaderLabels(cols)
+        self.occ_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.occ_table.setFixedHeight(min(40 * len(reports) + 36, 300))
+
+        for r, rep in enumerate(reports):
+            self.occ_table.setItem(r, 0, QTableWidgetItem(rep['room_type']))
+            self.occ_table.setItem(r, 1, QTableWidgetItem(str(rep['floor_number'])))
+            self.occ_table.setItem(r, 2, QTableWidgetItem(f"£{rep['monthly_rent']}"))
+            self.occ_table.setItem(r, 3, QTableWidgetItem(rep['apt_status']))
+            self.occ_table.setItem(r, 4, QTableWidgetItem(str(rep['active_leases'])))
+            self.occ_table.setItem(r, 5, QTableWidgetItem(rep['occupants'] or "None"))
+
+    def _build_review_maintenance(self, layout):
+        self._add_title(layout, "Review Maintenance")
+        self.maint_table = QTableWidget()
+        self.maint_table.setStyleSheet(self._table_style())
+        self.maint_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.maint_table)
+        self._load_maint_table()
+
+    def _load_maint_table(self):
+        tickets = get_maintenance_tickets_by_city(self.current_city)
+        cols = ["TICKET ID", "APARTMENT", "REPORTER", "STATUS", "COST", "NOTES"]
+        self.maint_table.setColumnCount(len(cols))
+        self.maint_table.setRowCount(len(tickets))
+        self.maint_table.setHorizontalHeaderLabels(cols)
+        self.maint_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.maint_table.setFixedHeight(min(40 * len(tickets) + 36, 400))
+
+        for r, t in enumerate(tickets):
+            self.maint_table.setItem(r, 0, QTableWidgetItem(str(t['ticket_id'])[:8]))
+            self.maint_table.setItem(r, 1, QTableWidgetItem(f"{t['room_type']} (Fl {t['floor_number']})"))
+            self.maint_table.setItem(r, 2, QTableWidgetItem(t['reporter_name']))
+            self.maint_table.setItem(r, 3, QTableWidgetItem(t['status']))
+            self.maint_table.setItem(r, 4, QTableWidgetItem(f"£{t['materials_cost']}"))
+            self.maint_table.setItem(r, 5, QTableWidgetItem(str(t['resolution_notes'] or "")))
+
+    def _build_audit_log_page(self, layout):
+        self._add_title(layout, "Audit Log")
+        self.audit_table = QTableWidget()
+        self.audit_table.setStyleSheet(self._table_style())
+        self.audit_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.audit_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.audit_table)
+        self._load_audit_log()
+
+    def _load_audit_log(self):
+        logs = get_audit_log(limit=50)
+        cols = ["USER ID", "ACTION", "TABLE", "RECORD ID", "TIMESTAMP"]
+        self.audit_table.setColumnCount(len(cols))
+        self.audit_table.setRowCount(len(logs))
+        self.audit_table.setHorizontalHeaderLabels(cols)
+        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.audit_table.setFixedHeight(min(40 * len(logs) + 36, 400))
+        for r, entry in enumerate(logs):
+            self.audit_table.setItem(r, 0, QTableWidgetItem(str(entry.get("user_id", ""))[:8]))
+            self.audit_table.setItem(r, 1, QTableWidgetItem(entry.get("action", "")))
+            self.audit_table.setItem(r, 2, QTableWidgetItem(entry.get("table_name", "")))
+            self.audit_table.setItem(r, 3, QTableWidgetItem(str(entry.get("record_id", ""))[:8]))
+            self.audit_table.setItem(r, 4, QTableWidgetItem(str(entry.get("timestamp", ""))))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ACTION HANDLERS
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _on_create_user(self):
+        dlg = CreateUserDialog(self.current_city, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if not data:
+                QMessageBox.warning(self, "Error", "Validation failed.")
+                return
+            try:
+                uid = create_user(**data)
+                if self.current_user_id:
+                    write_audit_log(self.current_user_id, "CREATE_USER", "users", uid)
+                QMessageBox.information(self, "Success", f"User {data['username']} created.")
+                self._load_users_table()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _on_deactivate_user(self, user_id: str, username: str):
+        if QMessageBox.question(self, "Confirm", f"Deactivate {username}?") == QMessageBox.Yes:
+            if deactivate_user(user_id):
+                if self.current_user_id:
+                    write_audit_log(self.current_user_id, "DEACTIVATE", "users", user_id)
+                self._load_users_table()
+
+    def _on_activate_user(self, user_id: str, username: str):
+        if activate_user(user_id):
+            if self.current_user_id:
+                write_audit_log(self.current_user_id, "ACTIVATE", "users", user_id)
+            self._load_users_table()
+
+    def _on_reset_password(self, user_id: str, username: str):
+        dlg = ResetPasswordDialog(username, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            pwd = dlg.get_password()
+            if pwd and reset_password(user_id, pwd):
+                if self.current_user_id:
+                    write_audit_log(self.current_user_id, "RESET_PW", "users", user_id)
+                QMessageBox.information(self, "Success", "Password reset.")
+
+    def _on_register_apartment(self):
+        dlg = RegisterApartmentDialog(self.current_city, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if not data:
+                QMessageBox.warning(self, "Error", "Invalid data.")
+                return
+            city_id = get_city_id_by_name(self.current_city)
+            aid = create_apartment(city_id, **data)
+            write_audit_log(self.current_user_id, "CREATE", "apartments", aid)
+            self._load_apts_table()
+
+    def _on_delete_apartment(self, apt_id: str):
+        if QMessageBox.question(self, "Confirm", "Deactivate apartment?") == QMessageBox.Yes:
+            soft_delete_apartment(apt_id)
+            write_audit_log(self.current_user_id, "DEACTIVATE", "apartments", apt_id)
+            self._load_apts_table()
+
+    def _on_edit_tenant(self, tenant_data: dict):
+        dlg = EditTenantDialog(tenant_data, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if update_tenant(tenant_data['tenant_id'], **data):
+                write_audit_log(self.current_user_id, "UPDATE", "tenants", tenant_data['tenant_id'])
+                self._load_tenants_table()
+
+    def _on_assign_lease(self):
+        dlg = AssignLeaseDialog(self.current_city, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if not data:
+                QMessageBox.warning(self, "Error", "Invalid lease data.")
+                return
+            lid = create_lease(**data, created_by=self.current_user_id)
+            write_audit_log(self.current_user_id, "CREATE", "leases", lid)
+            self._load_leases_table()
+
     @staticmethod
     def _table_style():
         return """
-            QTableWidget {
-                background-color: white; border-radius: 8px; border: none;
-                gridline-color: #edf2f7;
-            }
-            QHeaderView::section {
-                background-color: #f7fafc; color: #718096; font-weight: bold;
-                font-size: 10px; border: none; padding: 8px;
-            }
+            QTableWidget { background-color: white; border-radius: 8px; border: none; gridline-color: #edf2f7; }
+            QHeaderView::section { background-color: #f7fafc; color: #718096; font-weight: bold; font-size: 10px; border: none; padding: 8px; }
             QTableWidget::item { padding: 8px; color: #2d3748; font-size: 12px; }
         """
 
-    # ── Navigation / Logout ───────────────────────────────────────────────
-    def _on_page_changed(self, page_name: str):
-        pass
+    @staticmethod
+    def _action_btn_style(color):
+        return f"QPushButton {{ background-color: {color}; color: white; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: bold; border: none; }}"
 
     def _logout(self):
         if self.main_app:

@@ -225,6 +225,14 @@ class MainApp(QMainWindow):
 
     def switch_to_role(self, role: str):
         """Switch to the dashboard page for the given role."""
+        # Rebuild AdminPage with fresh data and current_user on every login
+        if role == "Administrator":
+            old = self.admin_page
+            self.admin_page = AdminPage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(1, self.admin_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
         # Rebuild FinancePage with fresh data and current_user on every login
         if role == "Finance Manager":
             old = self.finance_page
