@@ -4,6 +4,8 @@ Covers FR-1.x (User Management, RBAC, Audit Log) and FR-5.2/5.3 (User Admin, Dat
 Also covers FR-2.x (Register Apartments, Manage Apartments, Leases, Tenants) for their assigned city.
 
 All data is fetched from the SQLite database via database.db_service.
+
+Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,

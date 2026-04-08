@@ -2,7 +2,9 @@
 shared_dialogs.py — Shared dialog UI components.
 
 Demonstrates Code Reusability and Inheritance by providing dialogs that can be reused
-across multiple role dashboards (e.g., Front-Desk Staff, Administrator, Maintenance).
+across multiple role dashboards (e.g., Front-Desk Staff, Administrator, Maintenance). 
+
+Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QLineEdit,

@@ -2,6 +2,8 @@
 app.py — PAMS Application Entry Point.
 Contains LoginWindow and MainApp (QMainWindow) with QStackedWidget
 for role-based page switching.
+
+Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout,
