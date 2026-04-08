@@ -8,6 +8,8 @@ instead of touching the database directly.
 
 import hashlib
 import uuid
+import os
+import csv
 from datetime import date, datetime
 from database.connection import get_db
 
@@ -45,7 +47,7 @@ def authenticate_user(username: str, password: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM users WHERE username = ? AND password_hash = ? AND is_active = 1",
-            (username, pw_hash),
+            (username.lower(), pw_hash),
         ).fetchone()
     return _row_to_dict(row)
 
@@ -64,7 +66,7 @@ def get_users(city_branch=None) -> list[dict]:
 
 
 def create_user(username, password, role, first_name, last_name, email,
-                phone=None, city_branch=None) -> str:
+                phone=None, city_branch=None, operated_by=None) -> str:
     uid = _new_id()
     with get_db() as conn:
         conn.execute(
@@ -74,29 +76,34 @@ def create_user(username, password, role, first_name, last_name, email,
             (uid, username, _hash_password(password), role, first_name, last_name,
              email, phone, city_branch),
         )
+    if operated_by: write_audit_log(operated_by, "CREATE", "users", uid)
     return uid
 
 
-def deactivate_user(user_id: str) -> bool:
+def deactivate_user(user_id: str, operated_by=None) -> bool:
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
             (user_id,),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "DEACTIVATE", "users", user_id)
+    return success
 
 
-def activate_user(user_id: str) -> bool:
+def activate_user(user_id: str, operated_by=None) -> bool:
     """Re-activate a previously deactivated user account."""
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE users SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
             (user_id,),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "ACTIVATE", "users", user_id)
+    return success
 
 
-def reset_password(user_id: str, new_password: str) -> bool:
+def reset_password(user_id: str, new_password: str, operated_by=None) -> bool:
     """Reset a user's password. Returns True if the update succeeded."""
     pw_hash = _hash_password(new_password)
     with get_db() as conn:
@@ -104,7 +111,9 @@ def reset_password(user_id: str, new_password: str) -> bool:
             "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
             (pw_hash, user_id),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "RESET_PW", "users", user_id)
+    return success
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -151,6 +160,7 @@ def register_tenant(first_name, last_name, ni_number, email, phone,
                 (tid, first_name, last_name, ni_number, email, phone,
                  emergency_contact, occupation, created_by),
             )
+        if created_by: write_audit_log(created_by, "CREATE", "tenants", tid)
         return tid
     except Exception:
         return None
@@ -164,16 +174,16 @@ def get_tenants() -> list[dict]:
 
 def update_tenant(tenant_id: str, **fields) -> bool:
     """Update one or more fields on a tenant record."""
+    operated_by = fields.pop('operated_by', None)
     if not fields:
         return False
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [tenant_id]
     with get_db() as conn:
-        cur = conn.execute(
-            f"UPDATE tenants SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?",
-            values,
-        )
-    return cur.rowcount > 0
+        cur = conn.execute(f"UPDATE tenants SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?", values)
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "UPDATE", "tenants", tenant_id)
+    return success
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -357,13 +367,27 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
 # MAINTENANCE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_maintenance_tickets(status=None) -> list[dict]:
-    sql = "SELECT * FROM maintenance_tickets"
+def get_maintenance_tickets(status=None, city_name=None) -> list[dict]:
+    """Get all maintenance tickets or filter by status/city."""
+    sql = """
+        SELECT m.*, a.room_type, a.floor_number, c.name as city_name,
+               (u.first_name || ' ' || u.last_name) AS reporter_name,
+               (u2.first_name || ' ' || u2.last_name) AS assignee_name
+        FROM maintenance_tickets m
+        JOIN apartments a ON m.apt_id = a.apt_id
+        JOIN cities c ON a.city_id = c.city_id
+        LEFT JOIN users u ON m.reported_by = u.user_id
+        LEFT JOIN users u2 ON m.assigned_to = u2.user_id
+        WHERE 1=1
+    """
     params = []
     if status:
-        sql += " WHERE status = ?"
+        sql += " AND m.status = ?"
         params.append(status)
-    sql += " ORDER BY created_at DESC"
+    if city_name:
+        sql += " AND c.name = ?"
+        params.append(city_name)
+    sql += " ORDER BY m.created_at DESC"
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
@@ -383,7 +407,7 @@ def log_maintenance_request(apt_id, description, priority="medium",
     return tid
 
 
-def resolve_ticket(ticket_id: str, notes="", hours=0.0, cost=0.0) -> bool:
+def resolve_ticket(ticket_id: str, notes="", hours=0.0, cost=0.0, operated_by=None) -> bool:
     """Mark a ticket as resolved."""
     with get_db() as conn:
         cur = conn.execute(
@@ -394,7 +418,9 @@ def resolve_ticket(ticket_id: str, notes="", hours=0.0, cost=0.0) -> bool:
                WHERE ticket_id = ?""",
             (notes, hours, cost, ticket_id),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "UPDATE_STATUS", "maintenance_tickets", ticket_id)
+    return success
 
 
 def close_ticket(ticket_id: str, closed_by: str) -> bool:
@@ -409,10 +435,12 @@ def close_ticket(ticket_id: str, closed_by: str) -> bool:
                WHERE ticket_id = ? AND status = 'resolved'""",
             (closed_by, ticket_id),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success: write_audit_log(closed_by, "UPDATE_STATUS", "maintenance_tickets", ticket_id)
+    return success
 
 
-def reopen_ticket(ticket_id: str) -> bool:
+def reopen_ticket(ticket_id: str, operated_by=None) -> bool:
     """Reopen a resolved or closed ticket — sets status back to 'open'."""
     with get_db() as conn:
         cur = conn.execute(
@@ -421,7 +449,9 @@ def reopen_ticket(ticket_id: str) -> bool:
                WHERE ticket_id = ?""",
             (ticket_id,),
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "UPDATE_STATUS", "maintenance_tickets", ticket_id)
+    return success
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -494,7 +524,7 @@ def get_apartments_by_city(city_name: str) -> list[dict]:
     return _rows_to_dicts(rows)
 
 
-def create_apartment(city_id: str, room_type: str, floor_number: int, monthly_rent: float) -> str:
+def create_apartment(city_id: str, room_type: str, floor_number: int, monthly_rent: float, operated_by=None) -> str:
     """Admin: Create an apartment."""
     apt_id = _new_id()
     with get_db() as conn:
@@ -503,31 +533,48 @@ def create_apartment(city_id: str, room_type: str, floor_number: int, monthly_re
                VALUES (?, ?, ?, ?, ?, 'available')""",
             (apt_id, city_id, room_type, floor_number, monthly_rent)
         )
+    if operated_by: write_audit_log(operated_by, "CREATE", "apartments", apt_id)
     return apt_id
 
 
 def update_apartment(apt_id: str, **fields) -> bool:
-    """Admin: Update apartment fields."""
+    """Admin: Update apartment fields with inherent validations."""
+    operated_by = fields.pop('operated_by', None)
     if not fields:
         return False
-    set_clause = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [apt_id]
+        
     with get_db() as conn:
+        if fields.get('status') == 'inactive':
+            active = conn.execute("SELECT 1 FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
+            if active:
+                raise ValueError("Cannot deactivate an apartment that has an active lease.")
+                
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [apt_id]
         cur = conn.execute(
             f"UPDATE apartments SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
             values
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "UPDATE", "apartments", apt_id)
+    return success
 
 
-def soft_delete_apartment(apt_id: str) -> bool:
-    """Admin: Soft delete an apartment by setting its status to 'inactive'."""
+def soft_delete_apartment(apt_id: str, operated_by=None) -> bool:
+    """Admin: Soft delete an apartment, but enforce logic if active leases exist."""
     with get_db() as conn:
+        # Business Logic Constraint
+        active = conn.execute("SELECT 1 FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
+        if active:
+            raise ValueError("Cannot deactivate an apartment that has an active lease.")
+            
         cur = conn.execute(
             "UPDATE apartments SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
             (apt_id,)
         )
-    return cur.rowcount > 0
+    success = cur.rowcount > 0
+    if success and operated_by: write_audit_log(operated_by, "DEACTIVATE", "apartments", apt_id)
+    return success
 
 
 def get_leases_by_city(city_name: str) -> list[dict]:
@@ -561,6 +608,7 @@ def create_lease(tenant_id: str, apt_id: str, start_date: str, end_date: str, re
             "UPDATE apartments SET status = 'occupied', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
             (apt_id,)
         )
+    if created_by: write_audit_log(created_by, "CREATE", "leases", lease_id)
     return lease_id
 
 
@@ -583,9 +631,23 @@ def get_tenants_by_city(city_name: str) -> list[dict]:
     return _rows_to_dicts(rows)
 
 
-def get_occupancy_report(city_name: str) -> list[dict]:
+def _build_where(city_name, days_back, apt_id, date_col):
+    clauses = ["1=1"]
+    params = []
+    if city_name and city_name != 'ALL':
+        clauses.append("c.name = ?")
+        params.append(city_name)
+    if apt_id and apt_id != 'ALL':
+        clauses.append("a.apt_id = ?")
+        params.append(apt_id)
+    if days_back:
+        clauses.append(f"{date_col} >= DATE('now', '-{days_back} days')")
+    return " AND ".join(clauses), params
+
+def get_occupancy_report(city_name: str, days_back: int = None, apt_id: str = None) -> list[dict]:
     """Admin: Generate Occupancy Reports per apartment (shows all active tenants)."""
-    sql = """
+    where_str, params = _build_where(city_name, days_back, apt_id, "a.created_at")
+    sql = f"""
         SELECT a.apt_id, a.room_type, a.floor_number, a.status as apt_status, a.monthly_rent,
                GROUP_CONCAT(t.first_name || ' ' || t.last_name, ', ') as occupants,
                COUNT(l.lease_id) as active_leases
@@ -593,43 +655,45 @@ def get_occupancy_report(city_name: str) -> list[dict]:
         JOIN cities c ON a.city_id = c.city_id
         LEFT JOIN leases l ON a.apt_id = l.apt_id AND l.status = 'active'
         LEFT JOIN tenants t ON l.tenant_id = t.tenant_id
-        WHERE c.name = ?
+        WHERE {where_str}
         GROUP BY a.apt_id
         ORDER BY a.floor_number, a.room_type
     """
     with get_db() as conn:
-        rows = conn.execute(sql, (city_name,)).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
-
-def get_financial_summary_by_city(city_name: str) -> dict:
+def get_financial_summary_by_city(city_name: str, days_back: int = None, apt_id: str = None) -> dict:
     """Admin: Basic financial summary comparing collected vs pending rent for their city."""
+    wcb, pb = _build_where(city_name, days_back, apt_id, "tx.payment_date")
+    wpi, ppi = _build_where(city_name, days_back, apt_id, "i.due_date")
+    wmc, pmc = _build_where(city_name, days_back, apt_id, "m.resolved_at")
     with get_db() as conn:
-        collected = conn.execute("""
+        collected = conn.execute(f"""
             SELECT COALESCE(SUM(tx.amount), 0)
             FROM transactions tx
             JOIN leases l ON tx.lease_id = l.lease_id
             JOIN apartments a ON l.apt_id = a.apt_id
             JOIN cities c ON a.city_id = c.city_id
-            WHERE c.name = ?
-        """, (city_name,)).fetchone()[0]
+            WHERE {wcb}
+        """, pb).fetchone()[0]
         
-        pending = conn.execute("""
+        pending = conn.execute(f"""
             SELECT COALESCE(SUM(i.amount_due), 0)
             FROM invoices i
             JOIN leases l ON i.lease_id = l.lease_id
             JOIN apartments a ON l.apt_id = a.apt_id
             JOIN cities c ON a.city_id = c.city_id
-            WHERE c.name = ? AND i.status IN ('pending', 'overdue')
-        """, (city_name,)).fetchone()[0]
+            WHERE {wpi} AND i.status IN ('pending', 'overdue')
+        """, ppi).fetchone()[0]
 
-        maintenance_cost = conn.execute("""
+        maintenance_cost = conn.execute(f"""
             SELECT COALESCE(SUM(m.materials_cost), 0)
             FROM maintenance_tickets m
             JOIN apartments a ON m.apt_id = a.apt_id
             JOIN cities c ON a.city_id = c.city_id
-            WHERE c.name = ?
-        """, (city_name,)).fetchone()[0]
+            WHERE {wmc}
+        """, pmc).fetchone()[0]
 
     return {
         "rent_collected": collected,
@@ -637,22 +701,116 @@ def get_financial_summary_by_city(city_name: str) -> dict:
         "maintenance_costs": maintenance_cost
     }
 
-
-def get_maintenance_tickets_by_city(city_name: str) -> list[dict]:
-    """Admin: Review Maintenance request lifecycle for their city."""
-    sql = """
-        SELECT m.*, a.room_type, a.floor_number,
-               (u.first_name || ' ' || u.last_name) AS reporter_name,
-               (u2.first_name || ' ' || u2.last_name) AS assignee_name
+def get_maintenance_report(city_name: str, days_back: int = None, apt_id: str = None) -> list[dict]:
+    where_str, params = _build_where(city_name, days_back, apt_id, "m.created_at")
+    sql = f"""
+        SELECT m.ticket_id, a.room_type, a.floor_number, m.description, m.status, 
+               m.resolved_at, COALESCE(m.materials_cost, 0) as cost
         FROM maintenance_tickets m
         JOIN apartments a ON m.apt_id = a.apt_id
         JOIN cities c ON a.city_id = c.city_id
-        LEFT JOIN users u ON m.reported_by = u.user_id
-        LEFT JOIN users u2 ON m.assigned_to = u2.user_id
-        WHERE c.name = ?
+        WHERE {where_str}
         ORDER BY m.created_at DESC
     """
     with get_db() as conn:
-        rows = conn.execute(sql, (city_name,)).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
+
+def process_early_leave(lease_id: str, operated_by: str = None) -> bool:
+    """Processes an early leave request. Sets end_date to +30 days, generates 5% penalty invoice."""
+    with get_db() as conn:
+        lease = conn.execute("SELECT rent_amount, tenant_id FROM leases WHERE lease_id = ?", (lease_id,)).fetchone()
+        if not lease:
+            return False
+            
+        rent = lease['rent_amount']
+        penalty = rent * 0.05
+        
+        # Shift end date
+        conn.execute("UPDATE leases SET end_date = DATE('now', '+30 days'), updated_at = CURRENT_TIMESTAMP WHERE lease_id = ?", (lease_id,))
+        
+        # Generate penalty invoice
+        inv_id = _new_id()
+        conn.execute(
+            """INSERT INTO invoices (invoice_id, tenant_id, lease_id, amount_due, due_date, status)
+               VALUES (?, ?, ?, ?, DATE('now', '+30 days'), 'pending')""",
+            (inv_id, lease['tenant_id'], lease_id, penalty)
+        )
+    if operated_by: write_audit_log(operated_by, "EARLY_LEAVE", "leases", lease_id)
+    return True
+
+
+
+
+
+def register_tenant(first_name: str, last_name: str, ni_number: str, email: str, phone: str = None, 
+                    emergency_contact: str = None, occupation: str = None, created_by: str = None) -> str:
+    """Shared function for Admin and Front-Desk to register a new tenant."""
+    tenant_id = _new_id()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO tenants (tenant_id, first_name, last_name, ni_number, email, phone, 
+                                    emergency_contact, occupation, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tenant_id, first_name, last_name, ni_number, email, phone, emergency_contact, occupation, created_by)
+        )
+    if created_by: write_audit_log(created_by, "CREATE_TENANT", "tenants", tenant_id)
+    return tenant_id
+
+
+def backup_database(output_folder: str = "backups") -> str:
+    """ADMIN ONLY: Generates a full SQL dump of the database using iterdump()."""
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = os.path.join(output_folder, f"pams_backup_{timestamp}.sql")
+    
+    with get_db() as conn:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            for line in conn.iterdump():
+                f.write(f'{line}\n')
+                
+    return filepath
+
+
+def export_reports_csv(city_name: str, days_back: int = None, apt_id: str = None, report_type: str = "All", output_folder: str = "exports", operated_by: str = None) -> str:
+    """ADMIN ONLY: FR-5.1 Generate discrete CSV reports selectively based on specific type."""
+    if not os.path.exists(output_folder): os.makedirs(output_folder)
+    timestr = datetime.now().strftime("%Y%m%d_%H%M%S")
+    city_suffix = city_name if city_name else 'ALL'
+    
+    # 1. Occupancy
+    if report_type in ("All", "Occupancy"):
+        occ_data = get_occupancy_report(city_name, days_back, apt_id)
+        occ_file = os.path.join(output_folder, f"occupancy_report_{city_suffix}_{timestr}.csv")
+        with open(occ_file, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["Apartment ID", "Room Type", "Floor", "Status", "Monthly Rent", "Active Leases", "Occupants"])
+            for r in occ_data:
+                w.writerow([r.get('apt_id',''), r.get('room_type',''), r.get('floor_number',''), r.get('apt_status',''), r.get('monthly_rent',''), r.get('active_leases',0), r.get('occupants','')])
+
+    # 2. Financial
+    if report_type in ("All", "Financial"):
+        fin_data = get_financial_summary_by_city(city_name, days_back, apt_id)
+        fin_file = os.path.join(output_folder, f"financial_report_{city_suffix}_{timestr}.csv")
+        with open(fin_file, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["Category", "Amount (£)"])
+            w.writerow(["Rent Collected", fin_data.get('rent_collected', 0)])
+            w.writerow(["Rent Pending", fin_data.get('rent_pending', 0)])
+            w.writerow(["Maintenance Costs", fin_data.get('maintenance_costs', 0)])
+
+    # 3. Maintenance
+    if report_type in ("All", "Maintenance"):
+        maint_data = get_maintenance_report(city_name, days_back, apt_id)
+        maint_file = os.path.join(output_folder, f"maintenance_report_{city_suffix}_{timestr}.csv")
+        with open(maint_file, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["Ticket ID", "Room Type", "Floor", "Issue", "Status", "Resolved At", "Cost (£)"])
+            for m in maint_data:
+                w.writerow([m.get('ticket_id',''), m.get('room_type',''), m.get('floor_number',''), m.get('description',''), m.get('status',''), m.get('resolved_at',''), m.get('cost',0)])
+            
+    if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", report_type)
+    return output_folder
 

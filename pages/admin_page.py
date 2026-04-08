@@ -13,15 +13,18 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFormLayout, QDialogButtonBox, QMessageBox, QStackedWidget)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
+from datetime import datetime
 from components.sidebar import Sidebar
+from components.shared_dialogs import RegisterTenantDialog, UpdateMaintenanceStatusDialog
 from database.db_service import (
     get_users, get_audit_log, get_dashboard_stats,
     create_user, deactivate_user, activate_user,
     reset_password, write_audit_log, get_cities,
     get_apartments_by_city, create_apartment, update_apartment, soft_delete_apartment,
     get_leases_by_city, create_lease, get_tenants_by_city, update_tenant,
-    get_occupancy_report, get_financial_summary_by_city, get_maintenance_tickets_by_city,
-    get_city_id_by_name
+    get_occupancy_report, get_financial_summary_by_city, get_maintenance_tickets,
+    get_city_id_by_name, backup_database, register_tenant, resolve_ticket, close_ticket, reopen_ticket,
+    export_reports_csv, process_early_leave
 )
 
 
@@ -202,6 +205,65 @@ class RegisterApartmentDialog(QDialog):
             return None
 
 
+class UpdateApartmentDialog(QDialog):
+    def __init__(self, apt_data: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Update Apartment")
+        self.setFixedSize(350, 350)
+        self.setStyleSheet("background-color: #f0f2f5;")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.room_type = QComboBox()
+        self.room_type.addItems(['studio', 'one_bed', 'two_bed', 'three_bed', 'house'])
+        
+        self.floor = QLineEdit()
+        self.rent = QLineEdit()
+        
+        self.status = QComboBox()
+        self.status.addItems(['available', 'occupied', 'inactive', 'maintenance'])
+
+        input_style = (
+            "QLineEdit, QComboBox { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; font-size: 12px; background: white; color: #2d3748; }"
+        )
+        self.room_type.setStyleSheet(input_style)
+        self.floor.setStyleSheet(input_style)
+        self.rent.setStyleSheet(input_style)
+        self.status.setStyleSheet(input_style)
+
+        # Pre-fill data
+        idx = self.room_type.findText(apt_data.get('room_type', ''))
+        if idx >= 0: self.room_type.setCurrentIndex(idx)
+        self.floor.setText(str(apt_data.get('floor_number', '')))
+        self.rent.setText(str(apt_data.get('monthly_rent', '')))
+        idx = self.status.findText(apt_data.get('status', ''))
+        if idx >= 0: self.status.setCurrentIndex(idx)
+
+        form.addRow("Room Type *", self.room_type)
+        form.addRow("Floor Number *", self.floor)
+        form.addRow("Monthly Rent (£) *", self.rent)
+        form.addRow("Status *", self.status)
+        
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        try:
+            return {
+                "room_type": self.room_type.currentText(),
+                "floor_number": int(self.floor.text()),
+                "monthly_rent": float(self.rent.text()),
+                "status": self.status.currentText()
+            }
+        except ValueError:
+            return None
+
+
 class AssignLeaseDialog(QDialog):
     def __init__(self, current_city: str, parent=None):
         super().__init__(parent)
@@ -261,6 +323,55 @@ class AssignLeaseDialog(QDialog):
             }
         except ValueError:
             return None
+
+
+class ExportReportsDialog(QDialog):
+    def __init__(self, current_city: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export Reports Parameters")
+        self.setFixedSize(400, 250)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.time_combo = QComboBox()
+        self.time_combo.addItems(["All Time", "Past 1 Month", "Past 3 Months", "Past 6 Months"])
+        
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["All", "Occupancy", "Financial", "Maintenance"])
+        
+        self.apt_combo = QComboBox()
+        self.apt_combo.addItem("All Apartments", "ALL")
+        apts = get_apartments_by_city(current_city)
+        for a in apts:
+            self.apt_combo.addItem(f"{a['room_type']} - Fl {a['floor_number']}", a['apt_id'])
+            
+        input_style = (
+            "QComboBox { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; font-size: 12px; background: white; color: #2d3748; }"
+        )
+        self.time_combo.setStyleSheet(input_style)
+        self.type_combo.setStyleSheet(input_style)
+        self.apt_combo.setStyleSheet(input_style)
+            
+        form.addRow("Report Type:", self.type_combo)
+        form.addRow("Time Range:", self.time_combo)
+        form.addRow("Filter by Apartment:", self.apt_combo)
+        
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+    def get_data(self):
+        idx = self.time_combo.currentIndex()
+        mapping = {0: None, 1: 30, 2: 90, 3: 180}
+        days = mapping.get(idx, None)
+        apt_id = self.apt_combo.currentData()
+        report_t = self.type_combo.currentText()
+        return {"days_back": days, "apt_id": apt_id, "report_type": report_t}
 
 
 class EditTenantDialog(QDialog):
@@ -370,10 +481,11 @@ class AdminPage(QWidget):
         elif page_name == "Assign Lease":
             self._on_assign_lease()
             self.sidebar._set_active("Track Leases")
+        elif page_name == "Register Tenant":
+            self._on_register_tenant()
+            self.sidebar._set_active("View Tenant Info")
         elif page_name == "Data Backup":
-            QMessageBox.information(self, "Backup", "Data Backup completed successfully.")
-            self.sidebar._set_active("Dashboard")
-
+            self._on_data_backup()
     # ── Builders ─────────────────────────────────────────────────────────
     
     def _add_title(self, layout, text):
@@ -561,11 +673,12 @@ class AdminPage(QWidget):
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(4, 2, 4, 2)
-            if a['status'] != 'inactive':
-                del_btn = QPushButton("Deactivate")
-                del_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
-                del_btn.clicked.connect(lambda checked, aid=a['apt_id']: self._on_delete_apartment(aid))
-                actions_layout.addWidget(del_btn)
+            
+            upd_btn = QPushButton("Update")
+            upd_btn.setStyleSheet(self._action_btn_style("#3498db"))
+            upd_btn.clicked.connect(lambda checked, apt=a: self._on_update_apartment(apt))
+            actions_layout.addWidget(upd_btn)
+            
             self.apts_table.setCellWidget(r, 4, actions_widget)
 
     def _build_track_leases(self, layout):
@@ -578,7 +691,7 @@ class AdminPage(QWidget):
 
     def _load_leases_table(self):
         leases = get_leases_by_city(self.current_city)
-        cols = ["TENANT", "APARTMENT", "RENT", "START", "END", "STATUS"]
+        cols = ["TENANT", "APARTMENT", "RENT", "START", "END", "STATUS", "ACTIONS"]
         self.leases_table.setColumnCount(len(cols))
         self.leases_table.setRowCount(len(leases))
         self.leases_table.setHorizontalHeaderLabels(cols)
@@ -590,7 +703,32 @@ class AdminPage(QWidget):
             self.leases_table.setItem(r, 2, QTableWidgetItem(f"£{l['rent_amount']}"))
             self.leases_table.setItem(r, 3, QTableWidgetItem(str(l['start_date'])))
             self.leases_table.setItem(r, 4, QTableWidgetItem(str(l['end_date'])))
-            self.leases_table.setItem(r, 5, QTableWidgetItem(l['status']))
+            
+            status = l['status']
+            if status == 'active' and l['end_date']:
+                try:
+                    ed = datetime.strptime(str(l['end_date']), "%Y-%m-%d").date()
+                    if (ed - datetime.now().date()).days <= 30:
+                        status = "⏳ Expiring Soon"
+                except Exception:
+                    pass
+            
+            status_item = QTableWidgetItem(status)
+            if "Expiring" in status:
+                status_item.setForeground(QColor("#e74c3c"))
+            self.leases_table.setItem(r, 5, status_item)
+            
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            
+            if l['status'] == 'active':
+                leave_btn = QPushButton("Early Leave")
+                leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
+                leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))
+                actions_layout.addWidget(leave_btn)
+                
+            self.leases_table.setCellWidget(r, 6, actions_widget)
 
     def _build_view_tenant_info(self, layout):
         self._add_title(layout, "Tenant Information")
@@ -640,6 +778,12 @@ class AdminPage(QWidget):
         hlay.addWidget(QLabel(f"<b>Rent Collected:</b> £{fin['rent_collected']:.2f}"))
         hlay.addWidget(QLabel(f"<b>Rent Pending:</b> £{fin['rent_pending']:.2f}"))
         hlay.addWidget(QLabel(f"<b>Maintenance Costs:</b> £{fin['maintenance_costs']:.2f}"))
+        
+        export_btn = QPushButton("Export Reports (CSV)")
+        export_btn.setStyleSheet(self._action_btn_style("#27ae60"))
+        export_btn.clicked.connect(self._on_open_export_dialog)
+        hlay.addWidget(export_btn)
+        
         layout.addWidget(stats_frame)
 
         # Occupancy Table
@@ -679,8 +823,8 @@ class AdminPage(QWidget):
         self._load_maint_table()
 
     def _load_maint_table(self):
-        tickets = get_maintenance_tickets_by_city(self.current_city)
-        cols = ["TICKET ID", "APARTMENT", "REPORTER", "STATUS", "COST", "NOTES"]
+        tickets = get_maintenance_tickets(city_name=self.current_city)
+        cols = ["TICKET ID", "APARTMENT", "REPORTER", "STATUS", "COST", "ACTIONS"]
         self.maint_table.setColumnCount(len(cols))
         self.maint_table.setRowCount(len(tickets))
         self.maint_table.setHorizontalHeaderLabels(cols)
@@ -690,10 +834,26 @@ class AdminPage(QWidget):
         for r, t in enumerate(tickets):
             self.maint_table.setItem(r, 0, QTableWidgetItem(str(t['ticket_id'])[:8]))
             self.maint_table.setItem(r, 1, QTableWidgetItem(f"{t['room_type']} (Fl {t['floor_number']})"))
-            self.maint_table.setItem(r, 2, QTableWidgetItem(t['reporter_name']))
+            self.maint_table.setItem(r, 2, QTableWidgetItem(str(t['reporter_name'] or "Unknown/Unassigned")))
             self.maint_table.setItem(r, 3, QTableWidgetItem(t['status']))
             self.maint_table.setItem(r, 4, QTableWidgetItem(f"£{t['materials_cost']}"))
-            self.maint_table.setItem(r, 5, QTableWidgetItem(str(t['resolution_notes'] or "")))
+            
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            
+            if t['status'] != 'Closed':
+                btn = QPushButton("Update Status")
+                btn.setStyleSheet(self._action_btn_style("#00b894") if t['status'] == 'Resolved' else self._action_btn_style("#f39c12"))
+                btn.clicked.connect(lambda checked, tid=t['ticket_id'], status=t['status']: 
+                                    self._on_update_ticket_status(tid, status))
+                actions_layout.addWidget(btn)
+            else:
+                lbl = QLabel("Archived")
+                lbl.setStyleSheet("color: #7f8c8d; font-size: 11px; font-weight: bold;")
+                actions_layout.addWidget(lbl)
+                
+            self.maint_table.setCellWidget(r, 5, actions_widget)
 
     def _build_audit_log_page(self, layout):
         self._add_title(layout, "Audit Log")
@@ -723,6 +883,26 @@ class AdminPage(QWidget):
     # ACTION HANDLERS
     # ══════════════════════════════════════════════════════════════════════
 
+    def refresh_all_data(self):
+        """Reload all data components dynamically to reflect recent operations."""
+        if hasattr(self, 'users_table'): self._load_users_table()
+        if hasattr(self, 'apts_table'): self._load_apts_table()
+        if hasattr(self, 'leases_table'): self._load_leases_table()
+        if hasattr(self, 'tenants_table'): self._load_tenants_table()
+        if hasattr(self, 'maint_table'): self._load_maint_table()
+        if hasattr(self, 'audit_table'): self._load_audit_log()
+        if hasattr(self, 'occ_table'): self._load_occ_table()
+        
+        # Soft rebuild Dashboard for stat headers
+        if "Dashboard" in self.pages:
+            was_active = (self.content_stack.currentWidget() == self.pages["Dashboard"])
+            old_dash = self.pages["Dashboard"]
+            self.content_stack.removeWidget(old_dash)
+            old_dash.deleteLater()
+            self.pages["Dashboard"] = self._create_scroll_page(self._build_dashboard)
+            if was_active:
+                self.content_stack.setCurrentWidget(self.pages["Dashboard"])
+
     def _on_create_user(self):
         dlg = CreateUserDialog(self.current_city, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -731,34 +911,27 @@ class AdminPage(QWidget):
                 QMessageBox.warning(self, "Error", "Validation failed.")
                 return
             try:
-                uid = create_user(**data)
-                if self.current_user_id:
-                    write_audit_log(self.current_user_id, "CREATE_USER", "users", uid)
+                uid = create_user(**data, operated_by=self.current_user_id)
                 QMessageBox.information(self, "Success", f"User {data['username']} created.")
-                self._load_users_table()
+                self.refresh_all_data()
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
     def _on_deactivate_user(self, user_id: str, username: str):
         if QMessageBox.question(self, "Confirm", f"Deactivate {username}?") == QMessageBox.Yes:
-            if deactivate_user(user_id):
-                if self.current_user_id:
-                    write_audit_log(self.current_user_id, "DEACTIVATE", "users", user_id)
-                self._load_users_table()
+            if deactivate_user(user_id, operated_by=self.current_user_id):
+                self.refresh_all_data()
 
     def _on_activate_user(self, user_id: str, username: str):
-        if activate_user(user_id):
-            if self.current_user_id:
-                write_audit_log(self.current_user_id, "ACTIVATE", "users", user_id)
-            self._load_users_table()
+        if activate_user(user_id, operated_by=self.current_user_id):
+            self.refresh_all_data()
 
     def _on_reset_password(self, user_id: str, username: str):
         dlg = ResetPasswordDialog(username, parent=self)
         if dlg.exec_() == QDialog.Accepted:
             pwd = dlg.get_password()
-            if pwd and reset_password(user_id, pwd):
-                if self.current_user_id:
-                    write_audit_log(self.current_user_id, "RESET_PW", "users", user_id)
+            if pwd and reset_password(user_id, pwd, operated_by=self.current_user_id):
+                self.refresh_all_data()
                 QMessageBox.information(self, "Success", "Password reset.")
 
     def _on_register_apartment(self):
@@ -769,23 +942,31 @@ class AdminPage(QWidget):
                 QMessageBox.warning(self, "Error", "Invalid data.")
                 return
             city_id = get_city_id_by_name(self.current_city)
-            aid = create_apartment(city_id, **data)
-            write_audit_log(self.current_user_id, "CREATE", "apartments", aid)
-            self._load_apts_table()
+            create_apartment(city_id, **data, operated_by=self.current_user_id)
+            self.refresh_all_data()
 
-    def _on_delete_apartment(self, apt_id: str):
-        if QMessageBox.question(self, "Confirm", "Deactivate apartment?") == QMessageBox.Yes:
-            soft_delete_apartment(apt_id)
-            write_audit_log(self.current_user_id, "DEACTIVATE", "apartments", apt_id)
-            self._load_apts_table()
+    def _on_update_apartment(self, apt_data: dict):
+        dlg = UpdateApartmentDialog(apt_data, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if not data:
+                QMessageBox.warning(self, "Error", "Invalid data.")
+                return
+            try:
+                update_apartment(apt_data['apt_id'], **data, operated_by=self.current_user_id)
+                self.refresh_all_data()
+                QMessageBox.information(self, "Success", "Apartment updated successfully.")
+            except ValueError as ve:
+                QMessageBox.warning(self, "Conflict", str(ve))
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
 
     def _on_edit_tenant(self, tenant_data: dict):
         dlg = EditTenantDialog(tenant_data, parent=self)
         if dlg.exec_() == QDialog.Accepted:
             data = dlg.get_data()
-            if update_tenant(tenant_data['tenant_id'], **data):
-                write_audit_log(self.current_user_id, "UPDATE", "tenants", tenant_data['tenant_id'])
-                self._load_tenants_table()
+            if update_tenant(tenant_data['tenant_id'], operated_by=self.current_user_id, **data):
+                self.refresh_all_data()
 
     def _on_assign_lease(self):
         dlg = AssignLeaseDialog(self.current_city, parent=self)
@@ -794,9 +975,79 @@ class AdminPage(QWidget):
             if not data:
                 QMessageBox.warning(self, "Error", "Invalid lease data.")
                 return
-            lid = create_lease(**data, created_by=self.current_user_id)
-            write_audit_log(self.current_user_id, "CREATE", "leases", lid)
-            self._load_leases_table()
+            create_lease(**data, created_by=self.current_user_id)
+            self.refresh_all_data()
+
+    def _on_early_leave(self, lease_id: str):
+        if QMessageBox.question(self, "Early Leave", "Process early leave? This immediately incurs a 5% invoice penalty and compresses the end date.") == QMessageBox.Yes:
+            try:
+                process_early_leave(lease_id, operated_by=self.current_user_id)
+                self.refresh_all_data()
+                QMessageBox.information(self, "Success", "Early leave processed successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _on_register_tenant(self):
+        dlg = RegisterTenantDialog(parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if not data:
+                QMessageBox.warning(self, "Error", "Validation failed.")
+                return
+            try:
+                register_tenant(**data, created_by=self.current_user_id)
+                QMessageBox.information(self, "Success", f"Tenant registered.")
+                self.refresh_all_data()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _on_update_ticket_status(self, ticket_id: str, current_status: str):
+        dlg = UpdateMaintenanceStatusDialog(current_status, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            new_status = data['status'].lower()
+            try:
+                success = False
+                if new_status == 'closed':
+                    success = close_ticket(ticket_id, self.current_user_id)
+                    if not success:
+                        QMessageBox.warning(self, "Invalid Status", "Only 'Resolved' tickets can be closed.")
+                elif new_status == 'resolved':
+                    success = resolve_ticket(ticket_id, notes=data['notes'] or "", operated_by=self.current_user_id)
+                elif new_status == 'open':
+                    success = reopen_ticket(ticket_id, operated_by=self.current_user_id)
+                elif new_status in ['assigned', 'in progress']:
+                    QMessageBox.information(self, "Not Allowed", f"Admin cannot arbitrarily revert to '{new_status}'.")
+                
+                if success:
+                    self.refresh_all_data()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _on_data_backup(self):
+        try:
+            path = backup_database()
+            QMessageBox.information(self, "Backup Complete", f"Successfully exported database backup to:\n{path}")
+            self.sidebar._set_active("Dashboard")
+        except Exception as e:
+            QMessageBox.critical(self, "Backup Failed", f"An error occurred:\n{str(e)}")
+
+    def _on_open_export_dialog(self):
+        dlg = ExportReportsDialog(self.current_city, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            try:
+                path = export_reports_csv(
+                    self.current_city, 
+                    days_back=data['days_back'], 
+                    apt_id=data['apt_id'], 
+                    report_type=data['report_type'],
+                    operated_by=self.current_user_id
+                )
+                self.refresh_all_data()
+                QMessageBox.information(self, "Export Complete", f"Successfully exported requested report(s) to:\n{path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Failed", f"An error occurred:\n{str(e)}")
 
     @staticmethod
     def _table_style():

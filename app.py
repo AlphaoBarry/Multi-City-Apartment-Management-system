@@ -131,7 +131,7 @@ class LoginWindow(QWidget):
     # ── Login method ──────────────────────────────────────────────────────────────
     def login(self):
         """Authenticate against the database and route to role dashboard."""
-        username = self.username.text().strip()
+        username = self.username.text().strip().lower()
         password = self.password.text()
 
         # Try real DB authentication first

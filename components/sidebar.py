@@ -14,7 +14,7 @@ ROLE_MENUS = {
     "Administrator": {
         "OVERVIEW":          ["Dashboard"],
         "USER MANAGEMENT":   ["Manage Users", "Create User"],
-        "TENANT MANAGEMENT": ["View Tenant Info", "Assign Lease"],
+        "TENANT MANAGEMENT": ["Register Tenant", "View Tenant Info", "Assign Lease"],
         "PROPERTIES":        ["Register Apartment", "Manage Apartments", "Track Leases"],
         "REPORTS":           ["Generate Reports", "Review Maintenance"],
         "SYSTEM":            ["Audit Log", "Data Backup", "Logout"],
