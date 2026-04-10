@@ -6,6 +6,7 @@ All database queries live here. Pages and controllers import from this module
 instead of touching the database directly.
 """
 
+from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date, datetime
@@ -368,3 +369,109 @@ def get_leases(status=None) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MANAGER REPORTS - added by alpha
+# ══════════════════════════════════════════════════════════════════════════════
+
+def add_city(name: str, address: str = None) -> str:
+    # added by alpha
+    cid = _new_id()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO cities (city_id, name, address) VALUES (?,?,?)",
+            (cid, name, address)
+        )
+    return cid
+
+def delete_city(city_id: str) -> bool:
+    # added by alpha
+    try:
+        with get_db() as conn:
+            # First, get the city name before we delete it
+            row = conn.execute("SELECT name FROM cities WHERE city_id = ?", (city_id,)).fetchone()
+            if not row:
+                return False
+            city_name = row[0]
+
+            # Delete the city
+            cur = conn.execute("DELETE FROM cities WHERE city_id = ?", (city_id,))
+            
+            # If city deletion is successful, delete the associated administrator
+            if cur.rowcount > 0:
+                conn.execute(
+                    "DELETE FROM users WHERE role = 'admin' AND city_branch = ?", 
+                    (city_name,)
+                )
+                return True
+            return False
+    except Exception as e:
+        raise Exception("Cannot delete city. Make sure no apartments are linked to it.") from e
+
+def get_manager_occupancy_report(city_id=None) -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT c.name as city, COUNT(a.apt_id) as total_apartments,
+               SUM(CASE WHEN a.status = 'occupied' THEN 1 ELSE 0 END) as occupied,
+               SUM(CASE WHEN a.status != 'occupied' THEN 1 ELSE 0 END) as vacant
+        FROM cities c
+        LEFT JOIN apartments a ON c.city_id = a.city_id
+    """
+    params = []
+    if city_id and city_id != "All":
+        sql += " WHERE c.city_id = ?"
+        params.append(city_id)
+    sql += " GROUP BY c.city_id ORDER BY c.name"
+    
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+def get_manager_financial_report() -> dict:
+    # added by alpha
+    with get_db() as conn:
+        collected = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions").fetchone()[0]
+        pending = conn.execute("SELECT COALESCE(SUM(amount_due), 0) FROM invoices WHERE status = 'pending'").fetchone()[0]
+        overdue = conn.execute("SELECT COALESCE(SUM(amount_due), 0) FROM invoices WHERE status = 'overdue'").fetchone()[0]
+        expenses = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM expenses").fetchone()[0]
+        maint_cost = conn.execute("SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')").fetchone()[0]
+    return {
+        "collected": collected,
+        "pending": pending,
+        "overdue": overdue,
+        "expenses": expenses,
+        "maint_cost": maint_cost,
+        "net_profit": collected - expenses - maint_cost
+    }
+
+def get_maintenance_cost_report() -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT m.ticket_id, m.description, 
+               (u.first_name || ' ' || u.last_name) as worker_name,
+               m.time_spent_hours, 
+               m.materials_cost
+        FROM maintenance_tickets m
+        LEFT JOIN users u ON m.assigned_to = u.user_id
+        WHERE m.status IN ('resolved', 'closed')
+        ORDER BY m.resolved_at DESC
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql).fetchall()
+    return _rows_to_dicts(rows)
+
+def get_recent_transactions(limit=10) -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT t.receipt_ref, t.payment_date, t.amount, t.method,
+               (ten.first_name || ' ' || ten.last_name) as tenant_name
+        FROM transactions t
+        LEFT JOIN tenants ten ON t.tenant_id = ten.tenant_id
+        ORDER BY t.payment_date DESC LIMIT ?
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql, (limit,)).fetchall()
+    return _rows_to_dicts(rows)
+
