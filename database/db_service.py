@@ -500,7 +500,7 @@ def get_leases(status=None) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ADMIN CORE FUNCTIONALITIES
+# ADMIN CORE FUNCTIONALITIES - Added By bethel
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_city_id_by_name(city_name: str) -> str | None:
