@@ -2,6 +2,8 @@
 app.py — PAMS Application Entry Point.
 Contains LoginWindow and MainApp (QMainWindow) with QStackedWidget
 for role-based page switching.
+
+Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout,
@@ -131,7 +133,7 @@ class LoginWindow(QWidget):
     # ── Login method ──────────────────────────────────────────────────────────────
     def login(self):
         """Authenticate against the database and route to role dashboard."""
-        username = self.username.text().strip()
+        username = self.username.text().strip().lower()
         password = self.password.text()
 
         # Try real DB authentication first
@@ -225,6 +227,14 @@ class MainApp(QMainWindow):
 
     def switch_to_role(self, role: str):
         """Switch to the dashboard page for the given role."""
+        # Rebuild AdminPage with fresh data and current_user on every login
+        if role == "Administrator":
+            old = self.admin_page
+            self.admin_page = AdminPage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(1, self.admin_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
         # Rebuild FinancePage with fresh data and current_user on every login
         if role == "Finance Manager":
             old = self.finance_page

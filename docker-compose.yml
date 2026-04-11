@@ -23,9 +23,6 @@ services:
     environment:
       - PAMS_DB_PATH=/app/data/pams.db
       - PYTHONPATH=/app
-      # Use offscreen rendering since Docker has no display server
-      # Remove this if you set up X11 forwarding (VcXsrv on Windows)
-      - QT_QPA_PLATFORM=offscreen
       # GUI display forwarding (Linux host only)
       # On Windows use VcXsrv; on Mac use XQuartz
       - DISPLAY=${DISPLAY:-:0}

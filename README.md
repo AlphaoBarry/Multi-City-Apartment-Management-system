@@ -195,6 +195,9 @@ ASD_PAMS/
 
 ---
 
+## Seed Data (`database/seed_data.py`)
+Cities: 3 | Users: 6 | Apts: 6 | Tenants: 3 | Leases: 2 | Invoices: 2
+
 ## Communication Between Classes
 
 ### Signals Used
@@ -205,6 +208,8 @@ ASD_PAMS/
 | `page_changed(str)` | `Sidebar` | Each page's `_on_page_changed()` | Sub-page navigation (placeholder) |
 | `clicked` | `login_button` | `LoginWindow.login()` | Trigger authentication |
 | `returnPressed` | `password` field | `LoginWindow.login()` | Login on Enter key |
+
+
 
 ### Page Index Map
 

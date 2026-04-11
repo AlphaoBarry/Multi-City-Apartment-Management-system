@@ -12,11 +12,12 @@ from PyQt5.QtGui import QFont
 # ─── Menu config per role ─────────────────────────────────────────────────────
 ROLE_MENUS = {
     "Administrator": {
-        "OVERVIEW":        ["Dashboard"],
-        "USER MANAGEMENT": ["Manage Users", "Create User"],
-        "PROPERTIES":      ["Register Apartment", "Manage Apartments", "Track Leases"],
-        "REPORTS":         ["Generate Reports", "Review Maintenance"],
-        "SYSTEM":          ["Audit Log", "Data Backup", "Logout"],
+        "OVERVIEW":          ["Dashboard"],
+        "USER MANAGEMENT":   ["Manage Users", "Create User"],
+        "TENANT MANAGEMENT": ["Register Tenant", "View Tenant Info", "Assign Lease"],
+        "PROPERTIES":        ["Register Apartment", "Manage Apartments", "Track Leases"],
+        "REPORTS":           ["Generate Reports", "Review Maintenance"],
+        "SYSTEM":            ["Audit Log", "Data Backup", "Logout"],
     },
     "Manager": {
         "OVERVIEW":  ["Dashboard"],
