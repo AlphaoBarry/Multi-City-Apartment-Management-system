@@ -8,6 +8,7 @@ All data is fetched from the SQLite database via database.db_service.
 Akande Bethel - 24039449
 """
 
+from __future__ import annotations
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFrame, QGridLayout, QTableWidget,
                               QTableWidgetItem, QHeaderView, QPushButton,

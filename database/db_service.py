@@ -6,6 +6,7 @@ All database queries live here. Pages and controllers import from this module
 instead of touching the database directly.
 """
 
+from __future__ import annotations
 import hashlib
 import uuid
 import os
@@ -813,4 +814,165 @@ def export_reports_csv(city_name: str, days_back: int = None, apt_id: str = None
             
     if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", report_type)
     return output_folder
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MANAGER REPORTS - added by alpha
+# ══════════════════════════════════════════════════════════════════════════════
+
+def add_city(name: str, address: str = None) -> str:
+    # added by alpha
+    cid = _new_id()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO cities (city_id, name, address) VALUES (?,?,?)",
+            (cid, name, address)
+        )
+    return cid
+
+def delete_city(city_id: str) -> bool:
+    # added by alpha
+    try:
+        with get_db() as conn:
+            # First, get the city name before we delete it
+            row = conn.execute("SELECT name FROM cities WHERE city_id = ?", (city_id,)).fetchone()
+            if not row:
+                return False
+            city_name = row[0]
+
+            # Delete the city
+            cur = conn.execute("DELETE FROM cities WHERE city_id = ?", (city_id,))
+            
+            # If city deletion is successful, delete the associated administrator
+            if cur.rowcount > 0:
+                conn.execute(
+                    "DELETE FROM users WHERE role = 'admin' AND city_branch = ?", 
+                    (city_name,)
+                )
+                return True
+            return False
+    except Exception as e:
+        raise Exception("Cannot delete city. Make sure no apartments are linked to it.") from e
+
+def get_manager_occupancy_report(city_id=None) -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT c.name as city, COUNT(a.apt_id) as total_apartments,
+               SUM(CASE WHEN a.status = 'occupied' THEN 1 ELSE 0 END) as occupied,
+               SUM(CASE WHEN a.status != 'occupied' THEN 1 ELSE 0 END) as vacant
+        FROM cities c
+        LEFT JOIN apartments a ON c.city_id = a.city_id
+    """
+    params = []
+    if city_id and city_id != "All":
+        sql += " WHERE c.city_id = ?"
+        params.append(city_id)
+    sql += " GROUP BY c.city_id ORDER BY c.name"
+    
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+def get_manager_financial_report() -> dict:
+    # added by alpha
+    with get_db() as conn:
+        collected = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions").fetchone()[0]
+        pending = conn.execute("SELECT COALESCE(SUM(amount_due), 0) FROM invoices WHERE status = 'pending'").fetchone()[0]
+        overdue = conn.execute("SELECT COALESCE(SUM(amount_due), 0) FROM invoices WHERE status = 'overdue'").fetchone()[0]
+        expenses = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM expenses").fetchone()[0]
+        maint_cost = conn.execute("SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')").fetchone()[0]
+    return {
+        "collected": collected,
+        "pending": pending,
+        "overdue": overdue,
+        "expenses": expenses,
+        "maint_cost": maint_cost,
+        "net_profit": collected - expenses - maint_cost
+    }
+
+def get_maintenance_cost_report() -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT m.ticket_id, m.description, 
+               (u.first_name || ' ' || u.last_name) as worker_name,
+               m.time_spent_hours, 
+               m.materials_cost
+        FROM maintenance_tickets m
+        LEFT JOIN users u ON m.assigned_to = u.user_id
+        WHERE m.status IN ('resolved', 'closed')
+        ORDER BY m.resolved_at DESC
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql).fetchall()
+    return _rows_to_dicts(rows)
+
+def get_recent_transactions(limit=10) -> list[dict]:
+    # added by alpha
+    sql = """
+        SELECT t.receipt_ref, t.payment_date, t.amount, t.method,
+               (ten.first_name || ' ' || ten.last_name) as tenant_name
+        FROM transactions t
+        LEFT JOIN tenants ten ON t.tenant_id = ten.tenant_id
+        ORDER BY t.payment_date DESC LIMIT ?
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql, (limit,)).fetchall()
+    return _rows_to_dicts(rows)
+
+def export_manager_reports_csv(report_type: str, output_path: str = None, city_id: str = None, operated_by: str = None) -> str:
+    """Manager: Generate discrete CSV reports selectively based on specific type."""
+    import os, csv
+    from datetime import datetime
+    
+    # If a specific output path is not provided, fall back to default
+    if not output_path:
+        output_folder = "exports"
+        if not os.path.exists(output_folder): os.makedirs(output_folder)
+        timestr = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(output_folder, f"manager_{report_type.lower()}_report_{timestr}.csv")
+        
+    # 1. Occupancy
+    if report_type == "Occupancy":
+        occ_data = get_manager_occupancy_report(city_id)
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["City", "Total Apartments", "Occupied", "Vacant", "Occupancy Rate"])
+            for r in occ_data:
+                total = r.get('total_apartments', 0)
+                occ = r.get('occupied', 0)
+                vac = r.get('vacant', 0)
+                rate = f"{int(occ / total * 100)}%" if total > 0 else "0%"
+                w.writerow([r.get('city', ''), total, occ, vac, rate])
+
+    # 2. Financial
+    elif report_type == "Financial":
+        fin_data = get_manager_financial_report()
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["Category", "Amount (£)"])
+            w.writerow(["Collected Rent", fin_data.get('collected', 0)])
+            w.writerow(["Pending Rent", fin_data.get('pending', 0)])
+            w.writerow(["Overdue Rent", fin_data.get('overdue', 0)])
+            w.writerow(["General Expenses", fin_data.get('expenses', 0)])
+            w.writerow(["Maintenance Cost", fin_data.get('maint_cost', 0)])
+            w.writerow(["Net Profit", fin_data.get('net_profit', 0)])
+            w.writerow([])
+            w.writerow(["Recent Transactions"])
+            w.writerow(["Receipt Ref", "Tenant", "Date", "Amount (£)", "Method"])
+            for tx in get_recent_transactions(50):
+                w.writerow([tx.get('receipt_ref',''), tx.get('tenant_name',''), tx.get('payment_date',''), tx.get('amount',0), tx.get('method','')])
+
+    # 3. Maintenance
+    elif report_type == "Maintenance":
+        maint_data = get_maintenance_cost_report()
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["Ticket ID", "Description", "Worker", "Hours", "Materials Cost (£)"])
+            for m in maint_data:
+                w.writerow([str(m.get('ticket_id',''))[:12], m.get('description',''), m.get('worker_name',''), m.get('time_spent_hours', 0), m.get('materials_cost',0)])
+            
+    if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", f"Manager_{report_type}")
+    return output_path
 

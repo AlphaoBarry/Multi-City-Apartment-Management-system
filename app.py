@@ -16,6 +16,7 @@ import sys
 from database.connection import init_db
 from database.db_service import authenticate_user
 
+
 init_db()
 
 # ── Page imports ──────────────────────────────────────────────────────────────
