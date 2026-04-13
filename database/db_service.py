@@ -469,6 +469,17 @@ def get_cities() -> list[dict]:
 # APARTMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def get_apartment_capacity(room_type: str) -> int:
+    """Returns the maximum number of active leases an apartment can hold based on its room_type."""
+    capacity_map = {
+        'studio': 1,
+        'one_bed': 1,
+        'two_bed': 2,
+        'three_bed': 3,
+        'house': 1
+    }
+    return capacity_map.get(room_type, 1)
+
 def get_apartments(city_id=None, status=None) -> list[dict]:
     sql = "SELECT * FROM apartments WHERE 1=1"
     params = []
@@ -545,10 +556,25 @@ def update_apartment(apt_id: str, **fields) -> bool:
         return False
         
     with get_db() as conn:
-        if fields.get('status') == 'inactive':
-            active = conn.execute("SELECT 1 FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
-            if active:
-                raise ValueError("Cannot deactivate an apartment that has an active lease.")
+        if 'status' in fields:
+            new_status = fields['status']
+            apt = conn.execute("SELECT room_type FROM apartments WHERE apt_id = ?", (apt_id,)).fetchone()
+            if not apt:
+                raise ValueError("Apartment not found")
+            
+            capacity = get_apartment_capacity(apt['room_type'])
+            active_count_row = conn.execute("SELECT COUNT(*) FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
+            active_leases = active_count_row[0] if active_count_row else 0
+            
+            if new_status == 'occupied':
+                if active_leases < capacity:
+                    raise ValueError("Apartment is not at full capacity — status cannot be manually set to occupied")
+            elif new_status == 'available':
+                if active_leases >= capacity:
+                    raise ValueError("Apartment has active leases at full capacity — free up a lease first")
+            elif new_status == 'inactive':
+                if active_leases > 0:
+                    raise ValueError("Cannot deactivate apartment with active leases")
                 
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         values = list(fields.values()) + [apt_id]
@@ -560,14 +586,13 @@ def update_apartment(apt_id: str, **fields) -> bool:
     if success and operated_by: write_audit_log(operated_by, "UPDATE", "apartments", apt_id)
     return success
 
-
 def soft_delete_apartment(apt_id: str, operated_by=None) -> bool:
     """Admin: Soft delete an apartment, but enforce logic if active leases exist."""
     with get_db() as conn:
         # Business Logic Constraint
         active = conn.execute("SELECT 1 FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
         if active:
-            raise ValueError("Cannot deactivate an apartment that has an active lease.")
+            raise ValueError("Cannot deactivate apartment with active leases")
             
         cur = conn.execute(
             "UPDATE apartments SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
@@ -599,15 +624,36 @@ def create_lease(tenant_id: str, apt_id: str, start_date: str, end_date: str, re
     """Admin: Assign a lease securely mapping tenant to an apartment."""
     lease_id = _new_id()
     with get_db() as conn:
+        # Step 1: Check apartment.status
+        apt = conn.execute("SELECT status, room_type FROM apartments WHERE apt_id = ?", (apt_id,)).fetchone()
+        if not apt:
+            raise ValueError("Apartment not found")
+        if apt['status'] in ('inactive', 'occupied'):
+            raise ValueError(f"Cannot assign lease: Apartment is currently {apt['status']}")
+            
+        # Step 2: Check capacity
+        capacity = get_apartment_capacity(apt['room_type'])
+        active_count_row = conn.execute("SELECT COUNT(*) FROM leases WHERE apt_id = ? AND status = 'active'", (apt_id,)).fetchone()
+        active_leases = active_count_row[0] if active_count_row else 0
+        
+        if active_leases >= capacity:
+            # Auto-flip status to occupied just in case it wasn't already, and reject the lease
+            conn.execute("UPDATE apartments SET status = 'occupied', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?", (apt_id,))
+            raise ValueError("Cannot assign lease: Apartment is already at max capacity")
+
+        # Create lease
         conn.execute(
             """INSERT INTO leases (lease_id, tenant_id, apt_id, start_date, end_date, rent_amount, status, created_by)
                VALUES (?, ?, ?, ?, ?, ?, 'active', ?)""",
             (lease_id, tenant_id, apt_id, start_date, end_date, rent_amount, created_by)
         )
-        # Update apartment status to occupied 
+        
+        # After successful assignment, recount active leases
+        new_active_leases = active_leases + 1
+        new_status = 'occupied' if new_active_leases >= capacity else 'available'
         conn.execute(
-            "UPDATE apartments SET status = 'occupied', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
-            (apt_id,)
+            "UPDATE apartments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
+            (new_status, apt_id)
         )
     if created_by: write_audit_log(created_by, "CREATE", "leases", lease_id)
     return lease_id

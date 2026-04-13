@@ -148,7 +148,8 @@ ASD_PAMS/
 - **User Management** — View, create, deactivate, reset passwords for employee accounts
 - **Audit Log** — View all data entries/modifications with User ID and timestamp
 - **Register Apartments** — Add new properties to the portfolio
-- **Manage Apartments** — Track apartment status across cities
+- **Manage Apartments** — Track apartment status across cities (Note: Old manual status override logic has been replaced with strict capacity-based occupancy validation rules).
+- **Lease Capacity Rules** — System auto-manages availability status based on room type capacity limits.
 - **Data Backup** — Export database to CSV/SQL
 
 ### Manager (FR-5.1, FR-2.6)
