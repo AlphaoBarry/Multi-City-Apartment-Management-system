@@ -4,7 +4,8 @@ import uuid
 from database.connection import get_db
 from database.db_service import (log_maintenance_request, resolve_ticket,
                                   close_ticket, reopen_ticket,
-                                  get_maintenance_tickets, create_user)
+                                  get_maintenance_tickets, create_user,
+                                  get_worker_availability, get_maintenance_financial_summary)
 
 
 def _create_apartment():
@@ -60,3 +61,37 @@ def test_reopen_ticket_sets_open():
     tickets = get_maintenance_tickets()
     ticket = [t for t in tickets if t["ticket_id"] == tid][0]
     assert ticket["status"] == "open"
+
+
+def test_get_worker_availability_counts():
+    aid = _create_apartment()
+    worker_id = create_user("worker_avail", "Pass123!", "maintenance", "John", "Avail", "avail@test.com")
+    
+    # 0 tasks initially
+    avail = get_worker_availability()
+    worker_data = [w for w in avail if w["user_id"] == worker_id][0]
+    assert worker_data["active_tickets"] == 0
+    
+    # Assign a task
+    tid = log_maintenance_request(aid, "Test Workload")
+    from database.db_service import assign_ticket
+    assign_ticket(tid, worker_id)
+    
+    avail = get_worker_availability()
+    worker_data = [w for w in avail if w["user_id"] == worker_id][0]
+    assert worker_data["active_tickets"] == 1
+
+
+def test_maintenance_financial_summary_aggregates():
+    aid = _create_apartment()
+    
+    # Initial summary
+    initial = get_maintenance_financial_summary()
+    
+    # Add a resolved ticket with cost
+    tid = log_maintenance_request(aid, "Expensive repair")
+    resolve_ticket(tid, notes="Resolved", hours=2, cost=150.0)
+    
+    final = get_maintenance_financial_summary()
+    assert final["total_spend"] == initial["total_spend"] + 150.0
+    assert final["avg_cost"] > 0

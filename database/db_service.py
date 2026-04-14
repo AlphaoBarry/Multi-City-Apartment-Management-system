@@ -361,6 +361,33 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
                 "Rent Collected": f"£{collected:,.0f}",
                 "Expenses": f"£{expenses:,.0f}",
             }
+
+        # added by tomisin
+        if role == "Maintenance Staff":
+            active_requests = conn.execute(
+                "SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')"
+            ).fetchone()[0]
+            completed = conn.execute(
+                "SELECT COUNT(*) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND date(resolved_at) >= date('now', 'start of month')"
+            ).fetchone()[0]
+            costs = conn.execute(
+                "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+            ).fetchone()[0]
+            
+            # Calculate live avg resolution time (in hours)
+            avg_res = conn.execute(
+                """SELECT AVG((julianday(resolved_at) - julianday(created_at)) * 24) 
+                   FROM maintenance_tickets 
+                   WHERE status IN ('resolved', 'closed') AND resolved_at IS NOT NULL"""
+            ).fetchone()[0]
+            avg_res_str = f"{avg_res:.1f}h" if avg_res else "0.0h"
+
+            return {
+                "active_requests": active_requests,
+                "completed_this_month": completed,
+                "avg_resolution_time": avg_res_str,
+                "maintenance_costs": f"£{costs:,.0f}",
+            }
     return {}
 
 
@@ -406,6 +433,21 @@ def log_maintenance_request(apt_id, description, priority="medium",
             (tid, apt_id, description, priority, "open", reported_by),
         )
     return tid
+
+
+def assign_ticket(ticket_id: str, assignee_id: str, operated_by: str = None) -> bool:
+    """Assign a ticket to a worker and update its status."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """UPDATE maintenance_tickets
+               SET status = 'assigned', assigned_to = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE ticket_id = ?""",
+            (assignee_id, ticket_id),
+        )
+    success = cur.rowcount > 0
+    if success and operated_by:
+        write_audit_log(operated_by, "ASSIGN_TICKET", "maintenance_tickets", ticket_id)
+    return success
 
 
 def resolve_ticket(ticket_id: str, notes="", hours=0.0, cost=0.0, operated_by=None) -> bool:
@@ -660,6 +702,9 @@ def get_occupancy_report(city_name: str, days_back: int = None, apt_id: str = No
         GROUP BY a.apt_id
         ORDER BY a.floor_number, a.room_type
     """
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MANAGER REPORTS - added by alpha
@@ -914,3 +959,87 @@ def get_recent_transactions(limit=10) -> list[dict]:
         rows = conn.execute(sql, (limit,)).fetchall()
     return _rows_to_dicts(rows)
 
+
+def get_worker_availability() -> list[dict]:
+    """Get active ticket counts for all maintenance workers."""
+    sql = """
+        SELECT u.user_id, u.first_name, u.last_name, 
+               COUNT(m.ticket_id) as active_tickets
+        FROM users u
+        LEFT JOIN maintenance_tickets m ON u.user_id = m.assigned_to 
+             AND m.status IN ('assigned', 'in_progress')
+        WHERE u.role = 'maintenance' AND u.is_active = 1
+        GROUP BY u.user_id
+        ORDER BY active_tickets ASC
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql).fetchall()
+    return _rows_to_dicts(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EQUIPMENT (added by tomisin)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_equipment(category=None) -> list[dict]:
+    """Get all equipment list."""
+    sql = "SELECT * FROM equipment"
+    params = []
+    if category and category != "All":
+        sql += " WHERE category = ?"
+        params.append(category)
+    sql += " ORDER BY name ASC"
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def update_equipment_stock(item_id: str, new_quantity: int, new_status: str = None) -> bool:
+    """Update stock levels for an item."""
+    sql = "UPDATE equipment SET quantity = ?, updated_at = CURRENT_TIMESTAMP"
+    params = [new_quantity]
+    if new_status:
+        sql += ", status = ?"
+        params.append(new_status)
+    sql += " WHERE item_id = ?"
+    params.append(item_id)
+    
+    with get_db() as conn:
+        cur = conn.execute(sql, params)
+    return cur.rowcount > 0
+
+
+def add_equipment(name: str, category: str, quantity: int, status: str = "Good") -> str:
+    """Add new equipment to inventory."""
+    item_id = _new_id()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO equipment (item_id, name, category, quantity, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (item_id, name, category, quantity, status)
+        )
+    return item_id
+
+
+def get_maintenance_financial_summary() -> dict:
+    """Detailed financial summary specifically for the Maintenance dashboard."""
+    with get_db() as conn:
+        total_spend = conn.execute(
+            "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+        ).fetchone()[0]
+        
+        avg_cost = conn.execute(
+            "SELECT COALESCE(AVG(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND materials_cost > 0"
+        ).fetchone()[0]
+        
+        monthly_spend = conn.execute(
+            """SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets 
+               WHERE status IN ('resolved', 'closed') 
+               AND date(resolved_at) >= date('now', 'start of month')"""
+        ).fetchone()[0]
+        
+    return {
+        "total_spend": total_spend,
+        "avg_cost": avg_cost,
+        "monthly_spend": monthly_spend
+    }

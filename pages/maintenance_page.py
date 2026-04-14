@@ -2,16 +2,394 @@
 maintenance_page.py — Dashboard for Maintenance Staff.
 Covers FR-4.x: Issue Reporting, Task Assignment, Status Updates,
 Task lifecycle, Time/Materials logging.
-"""
 
+Tomisin Layode - 24024995
+"""
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFrame, QGridLayout, QTableWidget,
                               QTableWidgetItem, QHeaderView, QPushButton,
-                              QScrollArea, QComboBox)
+                              QScrollArea, QComboBox, QDialog, QFormLayout,
+                              QLineEdit, QDialogButtonBox, QMessageBox, QStackedWidget)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from components.sidebar import Sidebar
-import mock_data as data
+# added by tomisin
+from database.db_service import (
+    get_maintenance_tickets, get_dashboard_stats,
+    resolve_ticket, close_ticket, reopen_ticket,
+    assign_ticket, get_users, get_worker_availability,
+    get_maintenance_cost_report, get_maintenance_financial_summary,
+    log_maintenance_request, get_apartments,
+    get_equipment, update_equipment_stock, add_equipment
+)
+
+# added by tomisin
+class AssignTicketDialog(QDialog):
+    def __init__(self, ticket_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Assign Ticket {str(ticket_data.get('ticket_id', ''))[:8]}")
+        self.setFixedSize(350, 150)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.worker_combo = QComboBox()
+        self.worker_combo.setStyleSheet("QComboBox { padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; }")
+        
+        # Load workers
+        workers = [u for u in get_users() if u.get("role") == "maintenance"]
+        for w in workers:
+            self.worker_combo.addItem(f"{w.get('first_name', '')} {w.get('last_name', '')}", w.get("user_id"))
+            
+        form.addRow("Assign To:", self.worker_combo)
+        layout.addLayout(form)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        if self.worker_combo.currentData():
+            return {"assignee_id": self.worker_combo.currentData()}
+        return None
+
+
+class TicketDetailsDialog(QDialog):
+    def __init__(self, ticket_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Ticket Details - {str(ticket_data.get('ticket_id', ''))[:8]}")
+        self.setFixedSize(400, 300)
+        self.setStyleSheet("background-color: white;")
+        
+        layout = QVBoxLayout(self)
+        
+        desc = QLabel(f"<b>Issue:</b> {ticket_data.get('description', '')}")
+        desc.setWordWrap(True)
+        worker = QLabel(f"<b>Worker:</b> {ticket_data.get('assignee_name', 'System')}")
+        notes = QLabel(f"<b>Resolution Notes:</b> {ticket_data.get('resolution_notes', 'N/A')}")
+        notes.setWordWrap(True)
+        time = QLabel(f"<b>Time Spent (Hours):</b> {ticket_data.get('time_spent_hours', 0)}")
+        cost = QLabel(f"<b>Materials Cost:</b> £{ticket_data.get('materials_cost', 0):.2f}")
+        
+        layout.addWidget(desc)
+        layout.addWidget(worker)
+        layout.addWidget(notes)
+        layout.addWidget(time)
+        layout.addWidget(cost)
+        layout.addStretch()
+        
+        btn = QPushButton("Close")
+        btn.clicked.connect(self.accept)
+        btn.setStyleSheet("padding: 8px; background: #3498db; color: white; border-radius: 6px;")
+        layout.addWidget(btn)
+
+class ResolveTicketDialog(QDialog):
+    def __init__(self, ticket_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Resolve Ticket {str(ticket_data.get('ticket_id', ''))[:8]}")
+        self.setFixedSize(350, 250)
+        self.setStyleSheet("background-color: #f0f2f5;")
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.notes_input = QLineEdit()
+        self.hours_input = QLineEdit()
+        self.hours_input.setPlaceholderText("e.g. 2.5")
+        self.cost_input = QLineEdit()
+        self.cost_input.setPlaceholderText("0.00")
+        
+        input_style = "QLineEdit { padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; }"
+        self.notes_input.setStyleSheet(input_style)
+        self.hours_input.setStyleSheet(input_style)
+        self.cost_input.setStyleSheet(input_style)
+        
+        form.addRow("Resolution Notes:", self.notes_input)
+        form.addRow("Hours Spent:", self.hours_input)
+        form.addRow("Materials Cost (£):", self.cost_input)
+        
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        try:
+            return {
+                "notes": self.notes_input.text(),
+                "hours": float(self.hours_input.text()) if self.hours_input.text() else 0.0,
+                "cost": float(self.cost_input.text()) if self.cost_input.text() else 0.0
+            }
+        except ValueError:
+            return None
+
+
+class WorkerAvailabilityView(QWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        header = QLabel("Worker Availability & Workload")
+        header.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        layout.addWidget(header)
+
+        self.table = QTableWidget()
+        self.table.setStyleSheet(self._table_style())
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.table)
+        
+        self.refresh_btn = QPushButton("Refresh Data")
+        self.refresh_btn.setStyleSheet("padding: 8px; background: #6c5ce7; color: white; border-radius: 6px; font-weight: bold;")
+        self.refresh_btn.clicked.connect(self.load_data)
+        layout.addWidget(self.refresh_btn)
+        
+        layout.addStretch()
+        self.load_data()
+
+    def load_data(self):
+        data = get_worker_availability()
+        cols = ["WORKER NAME", "ACTIVE TASKS", "AVAILABILITY STATUS"]
+        self.table.setColumnCount(len(cols))
+        self.table.setRowCount(len(data))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        for r, w in enumerate(data):
+            name = f"{w.get('first_name', '')} {w.get('last_name', '')}"
+            tasks = w.get('active_tickets', 0)
+            status_text = "Available" if tasks < 3 else "Busy"
+            status_color = "#27ae60" if tasks < 3 else "#e67e22"
+            
+            self.table.setItem(r, 0, QTableWidgetItem(name))
+            self.table.setItem(r, 1, QTableWidgetItem(str(tasks)))
+            
+            status_item = QTableWidgetItem(status_text)
+            status_item.setForeground(QColor(status_color))
+            self.table.setItem(r, 2, status_item)
+
+    def _table_style(self):
+        return """
+            QTableWidget { background-color: white; border-radius: 8px; border: 1px solid #e2e8f0; gridline-color: #f7fafc; }
+            QHeaderView::section {
+                background-color: #f8fafc; padding: 12px; border: none; border-bottom: 1px solid #edf2f7;
+                color: #4a5568; font-weight: bold; text-align: left; font-size: 11px;
+            }
+            QTableWidget::item { padding: 12px; color: #2d3748; font-size: 13px; }
+        """
+
+
+class CostTrackingView(QWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        header = QLabel("Cost Tracking & Financials")
+        header.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        layout.addWidget(header)
+
+        # Summary Cards
+        self.stats_layout = QHBoxLayout()
+        self.stats_layout.setSpacing(12)
+        layout.addLayout(self.stats_layout)
+
+        # Table
+        self.table = QTableWidget()
+        self.table.setStyleSheet(self._table_style())
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.table)
+        
+        self.refresh_btn = QPushButton("Refresh Financials")
+        self.refresh_btn.setStyleSheet("padding: 10px; background: #2ecc71; color: white; border-radius: 6px; font-weight: bold;")
+        self.refresh_btn.clicked.connect(self.load_data)
+        layout.addWidget(self.refresh_btn)
+        
+        layout.addStretch()
+        self.load_data()
+
+    def load_data(self):
+        # 1. Load Stats
+        summary = get_maintenance_financial_summary()
+        
+        # Clear existing cards
+        while self.stats_layout.count():
+            item = self.stats_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            
+        cards = [
+            (f"£{summary['total_spend']:,.2f}", "Total Lifetime Spend", "#34495e"),
+            (f"£{summary['monthly_spend']:,.2f}", "Monthly Spend", "#27ae60"),
+            (f"£{summary['avg_cost']:,.2f}", "Average Cost / Ticket", "#2980b9"),
+        ]
+        
+        for val, label, color in cards:
+            card = self._create_card(val, label, color)
+            self.stats_layout.addWidget(card)
+
+        # 2. Load Table
+        data = get_maintenance_cost_report()
+        cols = ["TICKET ID", "ISSUE", "WORKER", "MATERIALS COST", "TIME (HRS)"]
+        self.table.setColumnCount(len(cols))
+        self.table.setRowCount(len(data))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        for r, d in enumerate(data):
+            self.table.setItem(r, 0, QTableWidgetItem(str(d.get('ticket_id', ''))[:8]))
+            self.table.setItem(r, 1, QTableWidgetItem(d.get('description', '')))
+            self.table.setItem(r, 2, QTableWidgetItem(d.get('worker_name', 'System')))
+            
+            cost_item = QTableWidgetItem(f"£{d.get('materials_cost', 0.0):.2f}")
+            cost_item.setForeground(QColor("#e74c3c"))
+            self.table.setItem(r, 3, cost_item)
+            
+            self.table.setItem(r, 4, QTableWidgetItem(f"{d.get('time_spent_hours', 0.0)}h"))
+
+    def _create_card(self, value, label, color):
+        card = QFrame()
+        card.setFixedHeight(100)
+        card.setStyleSheet(f"background-color: white; border-radius: 10px; border-left: 5px solid {color};")
+        lay = QVBoxLayout(card)
+        v = QLabel(value)
+        v.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color};")
+        l = QLabel(label)
+        l.setStyleSheet("font-size: 12px; color: #718096;")
+        lay.addWidget(v)
+        lay.addWidget(l)
+        return card
+
+    def _table_style(self):
+        return """
+            QTableWidget { background-color: white; border-radius: 8px; border: 1px solid #e2e8f0; gridline-color: #f7fafc; }
+            QHeaderView::section {
+                background-color: #f8fafc; padding: 12px; border: none; border-bottom: 1px solid #edf2f7;
+                color: #4a5568; font-weight: bold; text-align: left; font-size: 11px;
+            }
+            QTableWidget::item { padding: 12px; color: #2d3748; font-size: 13px; }
+        """
+
+
+class UpdateStockDialog(QDialog):
+    def __init__(self, item_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Update {item_data['name']}")
+        self.setFixedSize(300, 200)
+        self.setStyleSheet("background-color: #f8fafc;")
+        
+        layout = QFormLayout(self)
+        
+        self.qty_input = QLineEdit(str(item_data['quantity']))
+        self.condition_input = QComboBox()
+        self.condition_input.addItems(["Good", "Fair", "Poor", "Broken"])
+        self.condition_input.setCurrentText(item_data.get('status', 'Good'))
+        
+        layout.addRow("Stock Quantity:", self.qty_input)
+        layout.addRow("Current Status:", self.condition_input)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def get_data(self):
+        try:
+            return int(self.qty_input.text() or 0), self.condition_input.currentText()
+        except ValueError:
+            return 0, self.condition_input.currentText()
+
+
+class EquipmentView(QWidget):
+    def __init__(self, main_app, parent=None):
+        super().__init__(parent)
+        self.main_app = main_app
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        # Header
+        header_lay = QHBoxLayout()
+        title = QLabel("Equipment & Inventory")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        header_lay.addWidget(title)
+        header_lay.addStretch()
+        
+        self.filter_box = QComboBox()
+        self.filter_box.addItems(["All", "Tools", "Supplies", "Parts"])
+        self.filter_box.currentTextChanged.connect(self.load_data)
+        self.filter_box.setFixedWidth(120)
+        header_lay.addWidget(QLabel("Filter:"))
+        header_lay.addWidget(self.filter_box)
+        
+        layout.addLayout(header_lay)
+
+        # Table
+        self.table = QTableWidget()
+        self.table.setStyleSheet(self._table_style())
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.table)
+        
+        layout.addStretch()
+        self.load_data()
+
+    def load_data(self):
+        category = self.filter_box.currentText()
+        data = get_equipment(category)
+        cols = ["ITEM NAME", "CATEGORY", "QUANTITY", "STATUS", "LAST CHECKED", "ACTIONS"]
+        self.table.setColumnCount(len(cols))
+        self.table.setRowCount(len(data))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        
+        for r, d in enumerate(data):
+            self.table.setItem(r, 0, QTableWidgetItem(d.get('name', '')))
+            self.table.setItem(r, 1, QTableWidgetItem(d.get('category', '')))
+            
+            qty = d.get('quantity', 0)
+            qty_item = QTableWidgetItem(str(qty))
+            if qty < 5: qty_item.setForeground(QColor("#e53e3e")) # Warning for low stock
+            self.table.setItem(r, 2, qty_item)
+            
+            status = d.get('status', 'Good')
+            status_item = QTableWidgetItem(status)
+            status_color = "#2f855a" if status == "Good" else "#c05621" if status == "Fair" else "#c53030"
+            status_item.setForeground(QColor(status_color))
+            self.table.setItem(r, 3, status_item)
+            
+            self.table.setItem(r, 4, QTableWidgetItem(str(d.get('last_checked', ''))[:16]))
+            
+            # Action Button
+            btn = QPushButton("Update")
+            btn.setStyleSheet("background: #edf2f7; color: #2d3748; padding: 4px; border-radius: 4px; font-size: 11px;")
+            btn.clicked.connect(lambda ch, item=d: self._open_update_dialog(item))
+            self.table.setCellWidget(r, 5, btn)
+
+    def _open_update_dialog(self, item):
+        dlg = UpdateStockDialog(item, self)
+        if dlg.exec_():
+            new_qty, new_status = dlg.get_data()
+            if update_equipment_stock(item['item_id'], new_qty, new_status):
+                self.load_data()
+
+    def _table_style(self):
+        return """
+            QTableWidget { background-color: white; border-radius: 8px; border: 1px solid #e2e8f0; gridline-color: #f7fafc; }
+            QHeaderView::section {
+                background-color: #f8fafc; padding: 12px; border: none; border-bottom: 1px solid #edf2f7;
+                color: #4a5568; font-weight: bold; text-align: left; font-size: 11px;
+            }
+            QTableWidget::item { padding: 12px; color: #2d3748; font-size: 13px; }
+        """
 
 
 class MaintenancePage(QWidget):
@@ -27,30 +405,47 @@ class MaintenancePage(QWidget):
         # ── Sidebar ──────────────────────────────────────────────────────
         self.sidebar = Sidebar(
             role="Maintenance Staff",
-            display_name=data.USERS["maintenance"]["display_name"],
+            display_name=self.main_app.current_user.get("first_name", "Maintenance") + " " + self.main_app.current_user.get("last_name", "Staff") if self.main_app and getattr(self.main_app, "current_user", None) else "Maintenance Staff",
         )
         self.sidebar.logout_signal.connect(self._logout)
         self.sidebar.page_changed.connect(self._on_page_changed)
         layout.addWidget(self.sidebar)
 
         # ── Content area ─────────────────────────────────────────────────
-        content = QScrollArea()
-        content.setWidgetResizable(True)
-        content.setStyleSheet("QScrollArea { border: none; background-color: #f0f2f5; }")
-        content_widget = QWidget()
-        content_widget.setStyleSheet("background-color: #f0f2f5;")
-        self.content_layout = QVBoxLayout(content_widget)
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack)
+
+        # 1. Dashboard View
+        self.dashboard_view = QScrollArea()
+        self.dashboard_view.setWidgetResizable(True)
+        self.dashboard_view.setStyleSheet("QScrollArea { border: none; background-color: #f0f2f5; }")
+        dash_widget = QWidget()
+        dash_widget.setStyleSheet("background-color: #f0f2f5;")
+        self.content_layout = QVBoxLayout(dash_widget)
         self.content_layout.setContentsMargins(24, 20, 24, 20)
         self.content_layout.setSpacing(16)
-        content.setWidget(content_widget)
-        layout.addWidget(content)
-
+        self.dashboard_view.setWidget(dash_widget)
+        
         self._build_header()
         self._build_stat_cards()
         self._build_work_queue()
         self._build_active_requests_table()
         self._build_completed_table()
         self.content_layout.addStretch()
+        
+        self.stack.addWidget(self.dashboard_view)
+
+        # 2. Worker Availability View
+        self.availability_view = WorkerAvailabilityView(self.main_app)
+        self.stack.addWidget(self.availability_view)
+
+        # 3. Cost Tracking View
+        self.cost_tracking_view = CostTrackingView(self.main_app)
+        self.stack.addWidget(self.cost_tracking_view)
+
+        # 4. Equipment View
+        self.equipment_view = EquipmentView(self.main_app)
+        self.stack.addWidget(self.equipment_view)
 
     # ── Header ────────────────────────────────────────────────────────────
     def _build_header(self):
@@ -58,24 +453,64 @@ class MaintenancePage(QWidget):
         title = QLabel("Maintenance Dashboard")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
         header_layout.addWidget(title)
+        
         header_layout.addStretch()
+        
+        # added by tomisin - Debug simulator
+        debug_btn = QPushButton("🛠️ Debug: Simulate Front Desk Request")
+        debug_btn.setStyleSheet("padding: 8px 12px; background: #34495e; color: white; border-radius: 6px; font-weight: 500;")
+        debug_btn.clicked.connect(self._simulate_request)
+        header_layout.addWidget(debug_btn)
+        
         self.content_layout.addLayout(header_layout)
+
+    def _simulate_request(self):
+        # Fetch first available apartment to avoid data errors
+        apts = get_apartments()
+        if not apts:
+            QMessageBox.critical(self, "Error", "No apartments found in database to link ticket to.")
+            return
+            
+        apt_id = apts[0]["apt_id"]
+        issues = ["Leaking faucet in kitchen", "Radiator not heating up", "Loose floorboard", "Broken window latch"]
+        import random
+        
+        ticket_id = log_maintenance_request(
+            apt_id=apt_id,
+            description=random.choice(issues) + " (SIMULATED)",
+            priority=random.choice(["low", "medium", "high"]),
+            reported_by=None # Simulated as anonymous or system
+        )
+        
+        if ticket_id:
+            QMessageBox.information(self, "Simulation Success", f"New ticket logged: {ticket_id[:8]}")
+            self.load_tickets()
 
     # ── Stat Cards ────────────────────────────────────────────────────────
     def _build_stat_cards(self):
-        stats = data.DASHBOARD_STATS["maintenance"]
+        self.stat_grid = QGridLayout()
+        self.stat_grid.setSpacing(12)
+        self.content_layout.addLayout(self.stat_grid)
+        self._load_stat_cards()
+
+    def _load_stat_cards(self):
+        # clear existing cards
+        while self.stat_grid.count():
+            child = self.stat_grid.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # added by tomisin
+        stats = get_dashboard_stats("Maintenance Staff")
         card_data = [
             (str(stats["active_requests"]),      "Active Requests",      "↑ 5%",  "#e67e22"),
             (str(stats["completed_this_month"]),  "Completed This Month", "↑ 12%", "#27ae60"),
             (str(stats["avg_resolution_time"]),   "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
             (str(stats["maintenance_costs"]),     "Maintenance Costs",    "↑ 3%",  "#3498db"),
         ]
-        grid = QGridLayout()
-        grid.setSpacing(12)
         for i, (value, label, change, top_bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, top_bar)
-            grid.addWidget(card, 0, i)
-        self.content_layout.addLayout(grid)
+            self.stat_grid.addWidget(card, 0, i)
 
     def _stat_card(self, value, label, change, top_bar_color):
         card = QFrame()
@@ -124,42 +559,75 @@ class MaintenancePage(QWidget):
         sub = QHBoxLayout()
         lbl = QLabel("Active Maintenance Requests")
         lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #1a202c;")
-        combo = QComboBox()
-        combo.addItems(["All Priorities", "High", "Medium", "Low"])
-        combo.setStyleSheet(
+        self.priority_filter = QComboBox()
+        self.priority_filter.addItems(["All Priorities", "High", "Medium", "Low"])
+        self.priority_filter.setStyleSheet(
             "QComboBox { padding: 4px 10px; border: 1px solid #cbd5e0; border-radius: 6px; "
             "font-size: 11px; color: #2d3748; background-color: white; }"
         )
+        self.priority_filter.currentTextChanged.connect(self._on_priority_changed)
         sub.addWidget(lbl)
         sub.addStretch()
-        sub.addWidget(combo)
+        sub.addWidget(self.priority_filter)
         self.content_layout.addLayout(sub)
 
-        active = [m for m in data.MAINTENANCE_REQUESTS if m["status"] != "Completed"]
+        self.active_table = QTableWidget()
+        self.active_table.setStyleSheet(self._table_style())
+        self.active_table.verticalHeader().setVisible(False)
+        self.active_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.content_layout.addWidget(self.active_table)
+        self._load_active_table()
+
+    def _load_active_table(self, priority_filter="All Priorities"):
+        # added by tomisin
+        active = [m for m in get_maintenance_tickets() if m["status"] not in ["resolved", "closed"]]
+        if priority_filter != "All Priorities":
+            active = [m for m in active if str(m.get("priority", "")).lower() == priority_filter.lower()]
+            
         cols = ["REQUEST ID", "TENANT", "APARTMENT", "ISSUE", "PRIORITY", "ASSIGNED TO", "SCHEDULED", "ACTIONS"]
-        table = QTableWidget(len(active), len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setFixedHeight(min(40 * len(active) + 36, 200))
-        table.setStyleSheet(self._table_style())
+        self.active_table.setColumnCount(len(cols))
+        self.active_table.setRowCount(len(active))
+        self.active_table.setHorizontalHeaderLabels(cols)
+        self.active_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.active_table.setFixedHeight(min(40 * len(active) + 36, 200))
 
-        status_colors = {"High": "#e74c3c", "Medium": "#e67e22", "Low": "#27ae60"}
+        status_colors = {"high": "#e74c3c", "medium": "#e67e22", "low": "#27ae60"}
         for r, m in enumerate(active):
-            table.setItem(r, 0, QTableWidgetItem(m["id"]))
-            table.setItem(r, 1, QTableWidgetItem(m["tenant"]))
-            table.setItem(r, 2, QTableWidgetItem(m["apartment"]))
-            table.setItem(r, 3, QTableWidgetItem(m["issue"]))
-            pri = QTableWidgetItem(f"● {m['priority']}")
-            pri.setForeground(QColor(status_colors.get(m["priority"], "#718096")))
-            table.setItem(r, 4, pri)
-            table.setItem(r, 5, QTableWidgetItem(m["assigned_to"]))
-            table.setItem(r, 6, QTableWidgetItem(m["scheduled"]))
-            action = "Update   Complete" if m["assigned_to"] != "Unassigned" else "Assign   Schedule"
-            table.setItem(r, 7, QTableWidgetItem(action))
-
-        self.content_layout.addWidget(table)
+            self.active_table.setItem(r, 0, QTableWidgetItem(m.get("ticket_id", "N/A")[:8]))
+            self.active_table.setItem(r, 1, QTableWidgetItem(m.get("reporter_name") or "System"))
+            
+            apt_display = f"Floor {m.get('floor_number', '')}, {m.get('city_name', '')}"
+            self.active_table.setItem(r, 2, QTableWidgetItem(apt_display))
+            
+            self.active_table.setItem(r, 3, QTableWidgetItem(m.get("description", "")))
+            
+            pri_val = str(m.get("priority", "medium")).lower()
+            pri = QTableWidgetItem(f"● {pri_val.capitalize()}")
+            pri.setForeground(QColor(status_colors.get(pri_val, "#718096")))
+            self.active_table.setItem(r, 4, pri)
+            
+            assignee = m.get("assignee_name") or "Unassigned"
+            self.active_table.setItem(r, 5, QTableWidgetItem(assignee))
+            
+            self.active_table.setItem(r, 6, QTableWidgetItem(str(m.get("created_at", "Not Scheduled"))[:10]))
+            
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            actions_layout.setSpacing(6)
+            
+            if m.get("status") == "open":
+                assign_btn = QPushButton("Assign")
+                assign_btn.setStyleSheet("background-color: #3498db; color: white; border-radius: 4px; padding: 4px;")
+                assign_btn.clicked.connect(lambda checked, t=m: self._on_assign(t))
+                actions_layout.addWidget(assign_btn)
+            else:
+                complete_btn = QPushButton("Complete")
+                complete_btn.setStyleSheet("background-color: #27ae60; color: white; border-radius: 4px; padding: 4px;")
+                complete_btn.clicked.connect(lambda checked, t=m: self._on_resolve(t))
+                actions_layout.addWidget(complete_btn)
+                
+            self.active_table.setCellWidget(r, 7, actions_widget)
 
     # ── Recently Completed Table ──────────────────────────────────────────
     def _build_completed_table(self):
@@ -167,26 +635,38 @@ class MaintenancePage(QWidget):
         lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a202c;")
         self.content_layout.addWidget(lbl)
 
-        completed = [m for m in data.MAINTENANCE_REQUESTS if m["status"] == "Completed"]
+        self.completed_table = QTableWidget()
+        self.completed_table.setStyleSheet(self._table_style())
+        self.completed_table.verticalHeader().setVisible(False)
+        self.completed_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.content_layout.addWidget(self.completed_table)
+        self._load_completed_table()
+
+    def _load_completed_table(self):
+        # added by tomisin
+        completed = [m for m in get_maintenance_tickets() if m["status"] in ["resolved", "closed"]]
         cols = ["REQUEST ID", "ISSUE", "WORKER", "TIME SPENT", "COST", "COMPLETED", "ACTIONS"]
-        table = QTableWidget(len(completed), len(cols))
-        table.setHorizontalHeaderLabels(cols)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setFixedHeight(min(40 * len(completed) + 36, 120))
-        table.setStyleSheet(self._table_style())
+        self.completed_table.setColumnCount(len(cols))
+        self.completed_table.setRowCount(len(completed))
+        self.completed_table.setHorizontalHeaderLabels(cols)
+        self.completed_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.completed_table.setFixedHeight(min(40 * len(completed) + 36, 120))
 
         for r, m in enumerate(completed):
-            table.setItem(r, 0, QTableWidgetItem(m["id"]))
-            table.setItem(r, 1, QTableWidgetItem(m["issue"]))
-            table.setItem(r, 2, QTableWidgetItem(m["assigned_to"]))
-            table.setItem(r, 3, QTableWidgetItem(m["time_spent"]))
-            table.setItem(r, 4, QTableWidgetItem(m["cost"]))
-            table.setItem(r, 5, QTableWidgetItem(m["date_logged"]))
-            table.setItem(r, 6, QTableWidgetItem("View Details"))
-
-        self.content_layout.addWidget(table)
+            self.completed_table.setItem(r, 0, QTableWidgetItem(m.get("ticket_id", "N/A")[:8]))
+            self.completed_table.setItem(r, 1, QTableWidgetItem(m.get("description", "")))
+            self.completed_table.setItem(r, 2, QTableWidgetItem(m.get("assignee_name") or "System"))
+            time_spent = f"{m.get('time_spent_hours', 0)} hours"
+            self.completed_table.setItem(r, 3, QTableWidgetItem(time_spent))
+            cost = f"£{m.get('materials_cost', 0.0):.2f}"
+            self.completed_table.setItem(r, 4, QTableWidgetItem(cost))
+            self.completed_table.setItem(r, 5, QTableWidgetItem(str(m.get("resolved_at", ""))[:10]))
+            
+            view_btn = QPushButton("View Details")
+            view_btn.setStyleSheet("color: #3498db; background: transparent; border: none; text-decoration: underline;")
+            view_btn.setCursor(Qt.PointingHandCursor)
+            view_btn.clicked.connect(lambda checked, t=m: self._on_view_details(t))
+            self.completed_table.setCellWidget(r, 6, view_btn)
 
     # ── Shared table style ────────────────────────────────────────────────
     @staticmethod
@@ -205,8 +685,69 @@ class MaintenancePage(QWidget):
 
     # ── Navigation / Logout ───────────────────────────────────────────────
     def _on_page_changed(self, page_name: str):
-        pass
+        if page_name == "Dashboard":
+            self.stack.setCurrentIndex(0)
+            self.load_tickets() # Refresh dashboard stats/tables
+        elif page_name == "Worker Availability":
+            self.stack.setCurrentIndex(1)
+            self.availability_view.load_data()
+        elif page_name == "Cost Tracking":
+            self.stack.setCurrentIndex(2)
+            self.cost_tracking_view.load_data()
+        elif page_name == "Equipment":
+            self.stack.setCurrentIndex(3)
+            self.equipment_view.load_data()
 
     def _logout(self):
         if self.main_app:
             self.main_app.logout()
+
+    def load_tickets(self):
+        """Reload tickets and update tables."""
+        self._load_active_table()
+        self._load_completed_table()
+        self._load_stat_cards()
+        
+    def _on_resolve(self, ticket_data):
+        dlg = ResolveTicketDialog(ticket_data, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if data is None:
+                QMessageBox.warning(self, "Invalid input", "Please check your hours or cost entries.")
+                return
+            
+            # Use real resolving snippet
+            current_user_id = self.main_app.current_user.get("user_id") if getattr(self, "main_app", None) and getattr(self.main_app, "current_user", None) else None
+            success = resolve_ticket(
+                ticket_id=ticket_data["ticket_id"],
+                notes=data["notes"],
+                hours=data["hours"],
+                cost=data["cost"],
+                operated_by=current_user_id
+            )
+            
+            if success:
+                QMessageBox.information(self, "Resolved", "Maintenance ticket resolved.")
+                self.load_tickets()
+            else:
+                QMessageBox.warning(self, "Error", "Could not resolve the ticket.")
+
+    def _on_priority_changed(self, text):
+        self._load_active_table(priority_filter=text)
+
+    def _on_assign(self, ticket_data):
+        dlg = AssignTicketDialog(ticket_data, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            data = dlg.get_data()
+            if data:
+                current_user_id = self.main_app.current_user.get("user_id") if getattr(self, "main_app", None) and getattr(self.main_app, "current_user", None) else None
+                success = assign_ticket(ticket_data["ticket_id"], data["assignee_id"], operated_by=current_user_id)
+                if success:
+                    QMessageBox.information(self, "Assigned", "Ticket assigned successfully.")
+                    self.load_tickets()
+                else:
+                    QMessageBox.warning(self, "Error", "Failed to assign ticket.")
+
+    def _on_view_details(self, ticket_data):
+        dlg = TicketDetailsDialog(ticket_data, parent=self)
+        dlg.exec_()

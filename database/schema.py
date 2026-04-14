@@ -182,6 +182,20 @@ CREATE_TABLES_SQL = [
     );
     """,
 
+    # ── 11. EQUIPMENT (Inventory Management — added by tomisin) ──────────────
+    """
+    CREATE TABLE IF NOT EXISTS equipment (
+        item_id     TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        category    TEXT NOT NULL,                   -- e.g. 'Tools', 'Supplies', 'Parts'
+        quantity    INTEGER DEFAULT 0,
+        status      TEXT NOT NULL CHECK(status IN ('Good', 'Fair', 'Poor', 'Broken')),
+        last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+
     # ── Indexes for common queries ────────────────────────────────────────────
     "CREATE INDEX IF NOT EXISTS idx_leases_tenant    ON leases(tenant_id);",
     "CREATE INDEX IF NOT EXISTS idx_leases_apt       ON leases(apt_id);",
