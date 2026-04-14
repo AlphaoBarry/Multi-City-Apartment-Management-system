@@ -1022,3 +1022,88 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
     if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", f"Manager_{report_type}")
     return output_path
 
+def get_worker_availability() -> list[dict]:
+    # added by tomisin
+    """Get active ticket counts for all maintenance workers."""
+    sql = """
+        SELECT u.user_id, u.first_name, u.last_name, 
+               COUNT(m.ticket_id) as active_tickets
+        FROM users u
+        LEFT JOIN maintenance_tickets m ON u.user_id = m.assigned_to 
+             AND m.status IN ('assigned', 'in_progress')
+        WHERE u.role = 'maintenance' AND u.is_active = 1
+        GROUP BY u.user_id
+        ORDER BY active_tickets ASC
+    """
+    with get_db() as conn:
+        rows = conn.execute(sql).fetchall()
+    return _rows_to_dicts(rows)
+
+
+# ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
+# EQUIPMENT (added by tomisin)
+# ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
+
+def get_equipment(category=None) -> list[dict]:
+    """Get all equipment list."""
+    sql = "SELECT * FROM equipment"
+    params = []
+    if category and category != "All":
+        sql += " WHERE category = ?"
+        params.append(category)
+    sql += " ORDER BY name ASC"
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def update_equipment_stock(item_id: str, new_quantity: int, new_status: str = None) -> bool:
+    """Update stock levels for an item."""
+    sql = "UPDATE equipment SET quantity = ?, updated_at = CURRENT_TIMESTAMP"
+    params = [new_quantity]
+    if new_status:
+        sql += ", status = ?"
+        params.append(new_status)
+    sql += " WHERE item_id = ?"
+    params.append(item_id)
+    
+    with get_db() as conn:
+        cur = conn.execute(sql, params)
+    return cur.rowcount > 0
+
+
+def add_equipment(name: str, category: str, quantity: int, status: str = "Good") -> str:
+    """Add new equipment to inventory."""
+    item_id = _new_id()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO equipment (item_id, name, category, quantity, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (item_id, name, category, quantity, status)
+        )
+    return item_id
+
+
+def get_maintenance_financial_summary() -> dict:
+    # added by tomisin
+    """Detailed financial summary specifically for the Maintenance dashboard."""
+    with get_db() as conn:
+        total_spend = conn.execute(
+            "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+        ).fetchone()[0]
+        
+        avg_cost = conn.execute(
+            "SELECT COALESCE(AVG(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND materials_cost > 0"
+        ).fetchone()[0]
+        
+        monthly_spend = conn.execute(
+            """SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets 
+               WHERE status IN ('resolved', 'closed') 
+               AND date(resolved_at) >= date('now', 'start of month')"""
+        ).fetchone()[0]
+        
+    return {
+        "total_spend": total_spend,
+        "avg_cost": avg_cost,
+        "monthly_spend": monthly_spend
+    }
