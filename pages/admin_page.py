@@ -802,7 +802,7 @@ class AdminPage(QWidget):
 
     def _load_occ_table(self):
         reports = get_occupancy_report(self.current_city)
-        cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "ACTIVE LEASES", "OCCUPANTS"]
+        cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "CAPACITY", "ACTIVE LEASES", "SPACES LEFT", "OCCUPANTS"]
         self.occ_table.setColumnCount(len(cols))
         self.occ_table.setRowCount(len(reports))
         self.occ_table.setHorizontalHeaderLabels(cols)
@@ -814,8 +814,10 @@ class AdminPage(QWidget):
             self.occ_table.setItem(r, 1, QTableWidgetItem(str(rep['floor_number'])))
             self.occ_table.setItem(r, 2, QTableWidgetItem(f"£{rep['monthly_rent']}"))
             self.occ_table.setItem(r, 3, QTableWidgetItem(rep['apt_status']))
-            self.occ_table.setItem(r, 4, QTableWidgetItem(str(rep['active_leases'])))
-            self.occ_table.setItem(r, 5, QTableWidgetItem(rep['occupants'] or "None"))
+            self.occ_table.setItem(r, 4, QTableWidgetItem(str(rep['capacity'])))
+            self.occ_table.setItem(r, 5, QTableWidgetItem(str(rep['active_leases'])))
+            self.occ_table.setItem(r, 6, QTableWidgetItem(str(rep['spaces_left'])))
+            self.occ_table.setItem(r, 7, QTableWidgetItem(rep['occupants'] or "None"))
 
     def _build_review_maintenance(self, layout):
         self._add_title(layout, "Review Maintenance")
@@ -827,7 +829,7 @@ class AdminPage(QWidget):
 
     def _load_maint_table(self):
         tickets = get_maintenance_tickets(city_name=self.current_city)
-        cols = ["TICKET ID", "APARTMENT", "REPORTER", "STATUS", "COST", "ACTIONS"]
+        cols = ["TICKET ID", "APARTMENT", "REPORTER", "ASSIGNED TO", "STATUS", "COST", "ACTIONS"]
         self.maint_table.setColumnCount(len(cols))
         self.maint_table.setRowCount(len(tickets))
         self.maint_table.setHorizontalHeaderLabels(cols)
@@ -838,8 +840,9 @@ class AdminPage(QWidget):
             self.maint_table.setItem(r, 0, QTableWidgetItem(str(t['ticket_id'])[:8]))
             self.maint_table.setItem(r, 1, QTableWidgetItem(f"{t['room_type']} (Fl {t['floor_number']})"))
             self.maint_table.setItem(r, 2, QTableWidgetItem(str(t['reporter_name'] or "Unknown/Unassigned")))
-            self.maint_table.setItem(r, 3, QTableWidgetItem(t['status']))
-            self.maint_table.setItem(r, 4, QTableWidgetItem(f"£{t['materials_cost']}"))
+            self.maint_table.setItem(r, 3, QTableWidgetItem(str(t['assignee_name'] or "Unknown/Unassigned")))
+            self.maint_table.setItem(r, 4, QTableWidgetItem(t['status']))
+            self.maint_table.setItem(r, 5, QTableWidgetItem(f"£{t['materials_cost']}"))
             
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
@@ -856,7 +859,7 @@ class AdminPage(QWidget):
                 lbl.setStyleSheet("color: #7f8c8d; font-size: 11px; font-weight: bold;")
                 actions_layout.addWidget(lbl)
                 
-            self.maint_table.setCellWidget(r, 5, actions_widget)
+            self.maint_table.setCellWidget(r, 6, actions_widget)
 
     def _build_audit_log_page(self, layout):
         self._add_title(layout, "Audit Log")

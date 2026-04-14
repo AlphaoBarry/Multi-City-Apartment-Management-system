@@ -399,9 +399,20 @@ class EquipmentView(QWidget):
 class MaintenancePage(QWidget):
     """Maintenance Staff dashboard — index 5 in MainApp stacked widget."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current_user=None):
         super().__init__(parent)
         self.main_app = parent
+        self.current_user = current_user or (parent.current_user if parent else None)
+        
+        display_name = "Maintenance Staff"
+        if self.current_user:
+            print("Current user:", self.current_user)
+            fname = self.current_user.get('first_name', '')
+            lname = self.current_user.get('last_name', '')
+            full = f"{fname} {lname}".strip()
+            if full:
+                display_name = full
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -409,7 +420,7 @@ class MaintenancePage(QWidget):
         # ── Sidebar ──────────────────────────────────────────────────────
         self.sidebar = Sidebar(
             role="Maintenance Staff",
-            display_name=self.main_app.current_user.get("first_name", "Maintenance") + " " + self.main_app.current_user.get("last_name", "Staff") if self.main_app and getattr(self.main_app, "current_user", None) else "Maintenance Staff",
+            display_name=display_name
         )
         self.sidebar.logout_signal.connect(self._logout)
         self.sidebar.page_changed.connect(self._on_page_changed)

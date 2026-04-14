@@ -748,7 +748,14 @@ def get_occupancy_report(city_name: str, days_back: int = None, apt_id: str = No
     """
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return _rows_to_dicts(rows)
+        
+    results = _rows_to_dicts(rows)
+    for r in results:
+        cap = get_apartment_capacity(r['room_type'])
+        r['capacity'] = cap
+        r['spaces_left'] = max(0, cap - r['active_leases'])
+        
+    return results
 
 def get_financial_summary_by_city(city_name: str, days_back: int = None, apt_id: str = None) -> dict:
     """Admin: Basic financial summary comparing collected vs pending rent for their city."""

@@ -72,7 +72,7 @@ class ManagerPage(QWidget):
         card_data = [
             (f"£{fin['collected']:,.0f}",    "Total Revenue",     "", "#27ae60"),
             (occ_rate,    "Occupancy Rate",    "",  "#3498db"),
-            (str(len(main_costs)),  "Open Maintenance",  "",   "#e67e22"),
+            (str(len(main_costs)),  "Resolved Maintenance",  "",   "#e67e22"),
             (str(total_apts),  "Total Properties",  "",      "#6c5ce7"),
         ]
         grid = QGridLayout()
