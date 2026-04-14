@@ -361,6 +361,33 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
                 "Rent Collected": f"£{collected:,.0f}",
                 "Expenses": f"£{expenses:,.0f}",
             }
+
+        # added by tomisin
+        if role == "Maintenance Staff":
+            active_requests = conn.execute(
+                "SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')"
+            ).fetchone()[0]
+            completed = conn.execute(
+                "SELECT COUNT(*) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND date(resolved_at) >= date('now', 'start of month')"
+            ).fetchone()[0]
+            costs = conn.execute(
+                "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+            ).fetchone()[0]
+            
+            # Calculate live avg resolution time (in hours)
+            avg_res = conn.execute(
+                """SELECT AVG((julianday(resolved_at) - julianday(created_at)) * 24) 
+                   FROM maintenance_tickets 
+                   WHERE status IN ('resolved', 'closed') AND resolved_at IS NOT NULL"""
+            ).fetchone()[0]
+            
+            return {
+                "active_requests": active_requests,
+                "completed_this_month": completed,
+                "avg_resolution_time": f"{avg_res:.1f}h" if avg_res else "0.0h",
+                "maintenance_costs": f"£{costs:,.0f}",
+            }
+
     return {}
 
 
@@ -407,6 +434,19 @@ def log_maintenance_request(apt_id, description, priority="medium",
         )
     return tid
 
+def assign_ticket(ticket_id: str, assignee_id: str, operated_by: str = None) -> bool:
+    """Assign a ticket to a worker and update its status."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """UPDATE maintenance_tickets
+               SET status = 'assigned', assigned_to = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE ticket_id = ?""",
+            (assignee_id, ticket_id),
+        )
+    success = cur.rowcount > 0
+    if success and operated_by:
+        write_audit_log(operated_by, "ASSIGN_TICKET", "maintenance_tickets", ticket_id)
+    return success
 
 def resolve_ticket(ticket_id: str, notes="", hours=0.0, cost=0.0, operated_by=None) -> bool:
     """Mark a ticket as resolved."""
