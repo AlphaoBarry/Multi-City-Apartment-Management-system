@@ -912,11 +912,10 @@ def export_reports_csv(city_name: str, days_back: int = None, apt_id: str = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MANAGER REPORTS - added by alpha
+# MANAGER REPORTS - Code by alpha
 # ══════════════════════════════════════════════════════════════════════════════
 
 def add_city(name: str, address: str = None) -> str:
-    # added by alpha
     cid = _new_id()
     with get_db() as conn:
         conn.execute(
@@ -926,7 +925,6 @@ def add_city(name: str, address: str = None) -> str:
     return cid
 
 def delete_city(city_id: str) -> bool:
-    # added by alpha
     try:
         with get_db() as conn:
             # First, get the city name before we delete it
@@ -950,7 +948,6 @@ def delete_city(city_id: str) -> bool:
         raise Exception("Cannot delete city. Make sure no apartments are linked to it.") from e
 
 def get_manager_occupancy_report(city_id=None) -> list[dict]:
-    # added by alpha
     sql = """
         SELECT c.name as city, COUNT(a.apt_id) as total_apartments,
                SUM(CASE WHEN a.status = 'occupied' THEN 1 ELSE 0 END) as occupied,
@@ -969,7 +966,6 @@ def get_manager_occupancy_report(city_id=None) -> list[dict]:
     return _rows_to_dicts(rows)
 
 def get_manager_financial_report() -> dict:
-    # added by alpha
     with get_db() as conn:
         collected = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions").fetchone()[0]
         pending = conn.execute("SELECT COALESCE(SUM(amount_due), 0) FROM invoices WHERE status = 'pending'").fetchone()[0]
@@ -986,7 +982,6 @@ def get_manager_financial_report() -> dict:
     }
 
 def get_maintenance_cost_report() -> list[dict]:
-    # added by alpha
     sql = """
         SELECT m.ticket_id, m.description, 
                (u.first_name || ' ' || u.last_name) as worker_name,
@@ -1002,7 +997,6 @@ def get_maintenance_cost_report() -> list[dict]:
     return _rows_to_dicts(rows)
 
 def get_recent_transactions(limit=10) -> list[dict]:
-    # added by alpha
     sql = """
         SELECT t.receipt_ref, t.payment_date, t.amount, t.method,
                (ten.first_name || ' ' || ten.last_name) as tenant_name
@@ -1029,8 +1023,26 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
     # 1. Occupancy
     if report_type == "Occupancy":
         occ_data = get_manager_occupancy_report(city_id)
+        
+        city_name = None
+        if city_id and city_id != "All":
+            with get_db() as conn:
+                row = conn.execute("SELECT name FROM cities WHERE city_id = ?", (city_id,)).fetchone()
+                if row:
+                    city_name = row[0]
+                    
+        detailed_data = get_occupancy_report(city_name)
+        
         with open(output_path, 'w', newline='', encoding='utf-8') as f:
             w = csv.writer(f)
+            
+            # Metadata Header
+            w.writerow(["Report Title:", "Occupancy Report by Manager"])
+            w.writerow(["Generation Date/Time:", f"Generated On: {datetime.now().strftime('%d-%b-%Y %H:%M')}"])
+            w.writerow(["Active Filters applied:", f"Location: {city_name or 'All Cities'}"])
+            w.writerow([])
+            
+            w.writerow(["City Summary"])
             w.writerow(["City", "Total Apartments", "Occupied", "Vacant", "Occupancy Rate"])
             for r in occ_data:
                 total = r.get('total_apartments', 0)
@@ -1038,6 +1050,22 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
                 vac = r.get('vacant', 0)
                 rate = f"{int(occ / total * 100)}%" if total > 0 else "0%"
                 w.writerow([r.get('city', ''), total, occ, vac, rate])
+                
+            w.writerow([])
+            w.writerow(["Detailed Apartment Occupancy"])
+            w.writerow(["Apartment ID", "Room Type", "Floor Number", "Status", "Monthly Rent", "Occupants", "Active Leases", "Capacity", "Spaces Left"])
+            for r in detailed_data:
+                w.writerow([
+                    r.get('apt_id', ''),
+                    r.get('room_type', ''),
+                    str(r.get('floor_number', '')),
+                    r.get('apt_status', ''),
+                    r.get('monthly_rent', ''),
+                    r.get('occupants') or 'None',
+                    r.get('active_leases', 0),
+                    r.get('capacity', 0),
+                    r.get('spaces_left', 0)
+                ])
 
     # 2. Financial
     elif report_type == "Financial":
@@ -1069,6 +1097,9 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
     if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", f"Manager_{report_type}")
     return output_path
 
+
+
+#CODE BY TOMISIN
 def get_worker_availability() -> list[dict]:
     # added by tomisin
     """Get active ticket counts for all maintenance workers."""

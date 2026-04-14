@@ -20,7 +20,7 @@ ROLE_MENUS = {
         "SYSTEM":            ["Audit Log", "Data Backup", "Logout"],
     },
     "Manager": {
-        "OVERVIEW":  ["Dashboard"],
+        "OVERVIEW":  ["Dashboard", "Staff Overview"],
         "REPORTS":   ["Maintenance Cost Reports", "Occupancy Reports", "Financial Summaries"],
         "CITIES":    ["Add New City"],
         "SYSTEM":    ["Logout"],

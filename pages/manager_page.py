@@ -11,10 +11,10 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QScrollArea, QStackedWidget, QComboBox, QLineEdit, QMessageBox, QFileDialog)
 from PyQt5.QtCore import Qt
 from components.sidebar import Sidebar
-from database.db_service import (get_dashboard_stats, get_manager_occupancy_report, 
+from database.db_service import (get_dashboard_stats, get_manager_occupancy_report, get_occupancy_report,
                                  get_manager_financial_report, get_maintenance_cost_report,
                                  add_city, delete_city, get_cities, get_overdue_invoices, get_maintenance_tickets,
-                                 get_recent_transactions, get_expenses, create_user, export_manager_reports_csv)
+                                 get_recent_transactions, get_expenses, create_user, export_manager_reports_csv, get_users)
 import mock_data as data
 
 class ManagerPage(QWidget):
@@ -46,6 +46,7 @@ class ManagerPage(QWidget):
         self._build_occupancy_report_page()
         self._build_financial_summary_page()
         self._build_add_city_page()
+        self._build_staff_overview_page()
 
         self.content_stack.setCurrentWidget(self._pages["Dashboard"])
 
@@ -195,6 +196,16 @@ class ManagerPage(QWidget):
         self.occ_table = QTableWidget()
         self.occ_table.setStyleSheet(self._table_style())
         lay.addWidget(self.occ_table)
+
+        detailed_lbl = QLabel("Detailed Apartment Occupancy")
+        detailed_lbl.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 20px; color: #1a202c;")
+        lay.addWidget(detailed_lbl)
+        
+        self.detailed_occ_table = QTableWidget()
+        self.detailed_occ_table.setStyleSheet(self._table_style())
+        self.detailed_occ_table.verticalHeader().setVisible(False)
+        lay.addWidget(self.detailed_occ_table)
+
         self._refresh_occupancy_table()
 
         lay.addStretch()
@@ -203,6 +214,8 @@ class ManagerPage(QWidget):
 
     def _refresh_occupancy_table(self):
         city_id = self.occ_filter.currentData() if self.occ_filter.currentIndex() > 0 else None
+        city_name = self.occ_filter.currentText() if self.occ_filter.currentIndex() > 0 else None
+        
         data = get_manager_occupancy_report(city_id)
         
         cols = ["CITY", "TOTAL APARTMENTS", "OCCUPIED", "VACANT", "OCCUPANCY RATE"]
@@ -224,6 +237,27 @@ class ManagerPage(QWidget):
             self.occ_table.setItem(r, 2, QTableWidgetItem(str(occ)))
             self.occ_table.setItem(r, 3, QTableWidgetItem(str(vac)))
             self.occ_table.setItem(r, 4, QTableWidgetItem(rate))
+
+        # Detailed Report
+        reports = get_occupancy_report(city_name)
+        d_cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "CAPACITY", "ACTIVE LEASES", "SPACES LEFT", "OCCUPANTS"]
+        self.detailed_occ_table.setColumnCount(len(d_cols))
+        self.detailed_occ_table.setRowCount(len(reports))
+        self.detailed_occ_table.setHorizontalHeaderLabels(d_cols)
+        self.detailed_occ_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.detailed_occ_table.verticalHeader().setVisible(False)
+        self.detailed_occ_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.detailed_occ_table.setFixedHeight(min(40 * len(reports) + 36, 400))
+
+        for r, rep in enumerate(reports):
+            self.detailed_occ_table.setItem(r, 0, QTableWidgetItem(rep['room_type']))
+            self.detailed_occ_table.setItem(r, 1, QTableWidgetItem(str(rep['floor_number'])))
+            self.detailed_occ_table.setItem(r, 2, QTableWidgetItem(f"£{rep['monthly_rent']}"))
+            self.detailed_occ_table.setItem(r, 3, QTableWidgetItem(rep['apt_status']))
+            self.detailed_occ_table.setItem(r, 4, QTableWidgetItem(str(rep['capacity'])))
+            self.detailed_occ_table.setItem(r, 5, QTableWidgetItem(str(rep['active_leases'])))
+            self.detailed_occ_table.setItem(r, 6, QTableWidgetItem(str(rep['spaces_left'])))
+            self.detailed_occ_table.setItem(r, 7, QTableWidgetItem(rep['occupants'] or "None"))
 
     # ══════════════════════════════════════════════════════════════════════
     # MAINTENANCE COST REPORT PAGE - added by alpha
@@ -421,7 +455,7 @@ class ManagerPage(QWidget):
             pass
 
     # ══════════════════════════════════════════════════════════════════════
-    # ADD NEW CITY PAGE - added by alpha
+    # ADD NEW CITY PAGE 
     # ══════════════════════════════════════════════════════════════════════
     def _build_add_city_page(self):
         page = self._make_scroll_page()
@@ -563,6 +597,73 @@ class ManagerPage(QWidget):
                     QMessageBox.warning(self, "Error", "City could not be deleted.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # STAFF OVERVIEW PAGE
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_staff_overview_page(self):
+        page = self._make_scroll_page()
+        lay = page.widget().layout()
+
+        title = QLabel("Staff & User Directory")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(title)
+
+        filter_row = QHBoxLayout()
+        self.staff_city_filter = QComboBox()
+        self.staff_city_filter.addItem("All Cities")
+        for city in get_cities():
+            self.staff_city_filter.addItem(city["name"], city["name"])
+        self.staff_city_filter.setStyleSheet(self._combo_style())
+        self.staff_city_filter.currentIndexChanged.connect(self._refresh_staff_table)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_staff_table)
+
+        filter_row.addWidget(QLabel("Filter by Location:"))
+        filter_row.addWidget(self.staff_city_filter)
+        filter_row.addStretch()
+        filter_row.addWidget(refresh_btn)
+        lay.addLayout(filter_row)
+
+        self.staff_table = QTableWidget()
+        self.staff_table.setStyleSheet(self._table_style())
+        lay.addWidget(self.staff_table)
+        self._refresh_staff_table()
+
+        lay.addStretch()
+        self._pages["Staff Overview"] = page
+        self.content_stack.addWidget(page)
+
+    def _refresh_staff_table(self):
+        from PyQt5.QtGui import QColor
+        city_branch = self.staff_city_filter.currentData() if self.staff_city_filter.currentIndex() > 0 else None
+        
+        users = get_users(city_branch=city_branch)
+        cols = ["USERNAME", "DISPLAY NAME", "ROLE", "CITY BRANCH", "STATUS"]
+        self.staff_table.setColumnCount(len(cols))
+        self.staff_table.setRowCount(len(users))
+        self.staff_table.setHorizontalHeaderLabels(cols)
+        self.staff_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.staff_table.verticalHeader().setVisible(False)
+        self.staff_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.staff_table.setFixedHeight(min(40 * len(users) + 36, 400))
+
+        for r, u in enumerate(users):
+            self.staff_table.setItem(r, 0, QTableWidgetItem(u.get("username", "")))
+            display = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+            self.staff_table.setItem(r, 1, QTableWidgetItem(display))
+            
+            role_fmt = str(u.get("role", "")).replace("_", " ").title()
+            self.staff_table.setItem(r, 2, QTableWidgetItem(role_fmt))
+            
+            self.staff_table.setItem(r, 3, QTableWidgetItem(u.get("city_branch", "N/A")))
+
+            is_active = u.get("is_active", 1)
+            status_item = QTableWidgetItem("● Active" if is_active else "● Inactive")
+            status_item.setForeground(QColor("#27ae60") if is_active else QColor("#e74c3c"))
+            self.staff_table.setItem(r, 4, status_item)
 
     # ══════════════════════════════════════════════════════════════════════
     # SHARED HELPERS
