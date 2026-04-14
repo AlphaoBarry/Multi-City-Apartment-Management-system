@@ -127,6 +127,7 @@ class ResolveTicketDialog(QDialog):
             return None
 
 
+# added by tomisin
 class WorkerAvailabilityView(QWidget):
     def __init__(self, main_app, parent=None):
         super().__init__(parent)
@@ -185,6 +186,7 @@ class WorkerAvailabilityView(QWidget):
         """
 
 
+# added by tomisin
 class CostTrackingView(QWidget):
     def __init__(self, main_app, parent=None):
         super().__init__(parent)
@@ -279,6 +281,7 @@ class CostTrackingView(QWidget):
         """
 
 
+# added by tomisin
 class UpdateStockDialog(QDialog):
     def __init__(self, item_data, parent=None):
         super().__init__(parent)
@@ -308,6 +311,7 @@ class UpdateStockDialog(QDialog):
             return 0, self.condition_input.currentText()
 
 
+# added by tomisin
 class EquipmentView(QWidget):
     def __init__(self, main_app, parent=None):
         super().__init__(parent)

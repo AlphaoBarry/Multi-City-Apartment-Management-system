@@ -931,7 +931,7 @@ def get_manager_financial_report() -> dict:
     }
 
 def get_maintenance_cost_report() -> list[dict]:
-    # added by alpha
+    # added by tomisin
     sql = """
         SELECT m.ticket_id, m.description, 
                (u.first_name || ' ' || u.last_name) as worker_name,
@@ -961,6 +961,7 @@ def get_recent_transactions(limit=10) -> list[dict]:
 
 
 def get_worker_availability() -> list[dict]:
+    # added by tomisin
     """Get active ticket counts for all maintenance workers."""
     sql = """
         SELECT u.user_id, u.first_name, u.last_name, 
@@ -1022,6 +1023,7 @@ def add_equipment(name: str, category: str, quantity: int, status: str = "Good")
 
 
 def get_maintenance_financial_summary() -> dict:
+    # added by tomisin
     """Detailed financial summary specifically for the Maintenance dashboard."""
     with get_db() as conn:
         total_spend = conn.execute(
