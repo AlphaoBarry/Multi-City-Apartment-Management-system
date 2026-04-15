@@ -34,7 +34,7 @@ _ROLE_DISPLAY = {
     "manager": "Manager",
     "front_desk": "Front-Desk Staff",
     "finance": "Finance Manager",
-    "maintenance": "Maintenance Staff",
+    "maintenance": "Maintenance", # modified by tomisin — renamed for consistency
 }
 
 
@@ -174,7 +174,7 @@ ROLE_PAGE_INDEX = {
     "Manager":           2,
     "Front-Desk Staff":  3,
     "Finance Manager":   4,
-    "Maintenance Staff": 5,
+    "Maintenance":       5, # modified by tomisin
 }
 
 
@@ -241,6 +241,15 @@ class MainApp(QMainWindow):
             old = self.finance_page
             self.finance_page = FinancePage(parent=self, current_user=self.current_user)
             self.stacked_widget.insertWidget(4, self.finance_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
+        # Rebuild MaintenancePage with fresh data and current_user on every login
+        if role == "Maintenance":
+            # modified by tomisin — ensuring fresh city-based data on login
+            old = self.maintenance_page
+            self.maintenance_page = MaintenancePage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(5, self.maintenance_page)
             self.stacked_widget.removeWidget(old)
             old.deleteLater()
 

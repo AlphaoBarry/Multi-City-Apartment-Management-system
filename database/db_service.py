@@ -362,23 +362,39 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
                 "Expenses": f"£{expenses:,.0f}",
             }
 
-        # added by tomisin
-        if role == "Maintenance Staff":
+        # modified by tomisin — added city_branch filtering and role renaming
+        if role == "Maintenance Staff" or role == "Maintenance":
+            base_sql = "FROM maintenance_tickets"
+            where_clause = "WHERE"
+            params = []
+            if city_branch:
+                base_sql = """
+                    FROM maintenance_tickets
+                    JOIN apartments a ON maintenance_tickets.apt_id = a.apt_id
+                    JOIN cities c ON a.city_id = c.city_id
+                """
+                where_clause = "WHERE c.name = ? AND"
+                params = [city_branch]
+                
             active_requests = conn.execute(
-                "SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')"
-            ).fetchone()[0]
-            completed = conn.execute(
-                "SELECT COUNT(*) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND date(resolved_at) >= date('now', 'start of month')"
-            ).fetchone()[0]
-            costs = conn.execute(
-                "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+                f"SELECT COUNT(*) {base_sql} {where_clause} maintenance_tickets.status NOT IN ('resolved', 'closed')",
+                params
             ).fetchone()[0]
             
-            # Calculate live avg resolution time (in hours)
+            completed = conn.execute(
+                f"SELECT COUNT(*) {base_sql} {where_clause} maintenance_tickets.status IN ('resolved', 'closed') AND date(maintenance_tickets.resolved_at) >= date('now', 'start of month')",
+                params
+            ).fetchone()[0]
+            
+            costs = conn.execute(
+                f"SELECT COALESCE(SUM(maintenance_tickets.materials_cost), 0) {base_sql} {where_clause} maintenance_tickets.status IN ('resolved', 'closed')",
+                params
+            ).fetchone()[0]
+            
             avg_res = conn.execute(
-                """SELECT AVG((julianday(resolved_at) - julianday(created_at)) * 24) 
-                   FROM maintenance_tickets 
-                   WHERE status IN ('resolved', 'closed') AND resolved_at IS NOT NULL"""
+                f"""SELECT AVG((julianday(maintenance_tickets.resolved_at) - julianday(maintenance_tickets.created_at)) * 24) 
+                   {base_sql} {where_clause} maintenance_tickets.status IN ('resolved', 'closed') AND maintenance_tickets.resolved_at IS NOT NULL""",
+                params
             ).fetchone()[0]
             
             return {
@@ -985,8 +1001,9 @@ def get_manager_financial_report() -> dict:
         "net_profit": collected - expenses - maint_cost
     }
 
-def get_maintenance_cost_report() -> list[dict]:
-    # added by alpha
+def get_maintenance_cost_report(city_name: str = None) -> list[dict]:
+    # modified by tomisin — added city_name filtering and apartment joins
+    """Manager/Maintenance: Get report of completed tickets and their costs, optionally filtered by city."""
     sql = """
         SELECT m.ticket_id, m.description, 
                (u.first_name || ' ' || u.last_name) as worker_name,
@@ -994,11 +1011,19 @@ def get_maintenance_cost_report() -> list[dict]:
                m.materials_cost
         FROM maintenance_tickets m
         LEFT JOIN users u ON m.assigned_to = u.user_id
+        JOIN apartments a ON m.apt_id = a.apt_id
+        JOIN cities c ON a.city_id = c.city_id
         WHERE m.status IN ('resolved', 'closed')
-        ORDER BY m.resolved_at DESC
     """
+    params = []
+    if city_name:
+        sql += " AND c.name = ?"
+        params.append(city_name)
+        
+    sql += " ORDER BY m.resolved_at DESC"
+    
     with get_db() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 def get_recent_transactions(limit=10) -> list[dict]:
@@ -1069,9 +1094,9 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
     if operated_by: write_audit_log(operated_by, "EXPORT_REPORT", "reports", f"Manager_{report_type}")
     return output_path
 
-def get_worker_availability() -> list[dict]:
-    # added by tomisin
-    """Get active ticket counts for all maintenance workers."""
+def get_worker_availability(city_branch: str = None) -> list[dict]:
+    # modified by tomisin — added city_branch filtering for local team views
+    """Get active ticket counts for all maintenance workers, optionally filtered by city branch."""
     sql = """
         SELECT u.user_id, u.first_name, u.last_name, 
                COUNT(m.ticket_id) as active_tickets
@@ -1079,17 +1104,24 @@ def get_worker_availability() -> list[dict]:
         LEFT JOIN maintenance_tickets m ON u.user_id = m.assigned_to 
              AND m.status IN ('assigned', 'in_progress')
         WHERE u.role = 'maintenance' AND u.is_active = 1
+    """
+    params = []
+    if city_branch:
+        sql += " AND u.city_branch = ?"
+        params.append(city_branch)
+        
+    sql += """
         GROUP BY u.user_id
         ORDER BY active_tickets ASC
     """
     with get_db() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 
-# ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
+
 # EQUIPMENT (added by tomisin)
-# ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
+
 
 def get_equipment(category=None) -> list[dict]:
     """Get all equipment list."""
@@ -1131,22 +1163,37 @@ def add_equipment(name: str, category: str, quantity: int, status: str = "Good")
     return item_id
 
 
-def get_maintenance_financial_summary() -> dict:
-    # added by tomisin
-    """Detailed financial summary specifically for the Maintenance dashboard."""
+def get_maintenance_financial_summary(city_name: str = None) -> dict:
+    # modified by tomisin — added city_name filtering and SQL joins
+    """Detailed financial summary specifically for the Maintenance dashboard, optionally filtered by city."""
+    base_sql = "FROM maintenance_tickets"
+    where_clause = "WHERE"
+    params = []
+    if city_name:
+        base_sql = """
+            FROM maintenance_tickets
+            JOIN apartments a ON maintenance_tickets.apt_id = a.apt_id
+            JOIN cities c ON a.city_id = c.city_id
+        """
+        where_clause = "WHERE c.name = ? AND"
+        params = [city_name]
+
     with get_db() as conn:
         total_spend = conn.execute(
-            "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+            f"SELECT COALESCE(SUM(maintenance_tickets.materials_cost), 0) {base_sql} {where_clause} maintenance_tickets.status IN ('resolved', 'closed')",
+            params
         ).fetchone()[0]
         
         avg_cost = conn.execute(
-            "SELECT COALESCE(AVG(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND materials_cost > 0"
+            f"SELECT COALESCE(AVG(maintenance_tickets.materials_cost), 0) {base_sql} {where_clause} maintenance_tickets.status IN ('resolved', 'closed') AND maintenance_tickets.materials_cost > 0",
+            params
         ).fetchone()[0]
         
         monthly_spend = conn.execute(
-            """SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets 
-               WHERE status IN ('resolved', 'closed') 
-               AND date(resolved_at) >= date('now', 'start of month')"""
+            f"""SELECT COALESCE(SUM(maintenance_tickets.materials_cost), 0) {base_sql} {where_clause}
+               maintenance_tickets.status IN ('resolved', 'closed') 
+               AND date(maintenance_tickets.resolved_at) >= date('now', 'start of month')""",
+            params
         ).fetchone()[0]
         
     return {
