@@ -725,7 +725,7 @@ class AdminPage(QWidget):
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(4, 2, 4, 2)
             
-            if l['status'] == 'active':
+            if l['status'] == 'active' and "Expiring" not in status:
                 leave_btn = QPushButton("Early Leave")
                 leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
                 leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))

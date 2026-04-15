@@ -34,6 +34,11 @@ The `db_service.py` functions natively segregate administrative logic to preserv
 - **Process:** When iterating over the admin's lease table, the application automatically strips the `end_date` and measures it against `datetime.now()`.
 - **Alert:** Any lease with 30 days or less remaining automatically flips its visual status from "active" to an alarming **"⏳ Expiring Soon"** inside the main tracking table.
 
+### Occupancy & Capacity Computations
+- **Use Case:** Enhances reporting fidelity.
+- **Process:** Instead of simply returning raw tenant lists or active lease counts per apartment, the internal backend reporting natively evaluates physical property limits via `get_apartment_capacity()`.
+- **Computation:** The system statically assigns maximum capacity based on the specific `room_type`. By automatically subtracting `active_leases` from these ceilings, it computes bounded `spaces_left` parameters (always clamped using `max(0, ...)` logic). This makes the grid views and data exports self-regulating and highly detailed without human intervention.
+
 ### Soft Deletions (`soft_delete_apartment`)
 - We maintain crucial referential integrity for reporting (FR-5.1) by executing soft deletions on property management. Deleting an apartment explicitly changes its status to `inactive` rather than aggressively dropping the localized SQL row entirely. All core queries filter this out automatically whereas revenue metrics preserve historical data securely.
 
@@ -81,6 +86,7 @@ When a tenant requests premature cessation of their active lease contract, the s
 - **Date Compression:** Forcefully restricts `lease.end_date` dynamically strictly using mathematical limits (Current Timestamp + 30 Days contiguous).
 - **Penalty Computation:** Automatically derives a flat 5% calculation against the static `lease.rent_amount`.
 - **Invoicing Generation:** Seamlessly builds a brand-new `pending` invoice assigned structurally exclusively to the originating `tenant_id` and respective `lease_id` due exactly on the compressed exit date.
+- **Idempotency & Re-entry Protection:** To prevent duplicate penalty compounding via accidental UI double-clicking or repeated requests, the frontend utilizes an organic strict UI lockout. When the lease's end boundary enters the 30-day "Expiring Soon" threshold (which is triggered instantly upon pressing early leave), the corresponding action button drops out of the rendering scope preventing successive redundant API calls.
 
 ## 5. Database Operations & The "Ownership Chain"
 Rather than storing all information in one massive table (which causes data duplication), PAMS uses a **Relational Database**. Information is split across organized tables (`transactions`, `leases`, `apartments`, `cities`). To generate reports, the database engine **JOINs** these tables together on the fly using Foreign Keys.
