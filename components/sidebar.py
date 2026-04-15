@@ -37,7 +37,8 @@ ROLE_MENUS = {
         "REPORTS":   ["Financial Reports", "Revenue Analysis", "Expense Tracking"],
         "SYSTEM":    ["Logout"],
     },
-    "Maintenance Staff": {
+    # modified by tomisin — renamed from 'Maintenance Staff' to 'Maintenance'
+    "Maintenance": {
         "OVERVIEW":     ["Dashboard"],
         "WORK ORDERS":  ["Active Requests", "Scheduled Tasks", "Completed Tasks", "Emergency Requests"],
         "RESOURCES":    ["Worker Availability", "Equipment", "Cost Tracking"],
@@ -51,7 +52,7 @@ ROLE_ABBREV = {
     "Manager":           "MG",
     "Front-Desk Staff":  "FD",
     "Finance Manager":   "FM",
-    "Maintenance Staff":  "MS",
+    "Maintenance":  "MT",  # modified by tomisin — renamed from MS
 }
 
 ROLE_BADGE_COLORS = {
@@ -59,7 +60,7 @@ ROLE_BADGE_COLORS = {
     "Manager":           "#9b59b6",
     "Front-Desk Staff":  "#3498db",
     "Finance Manager":   "#e67e22",
-    "Maintenance Staff":  "#2ecc71",
+    "Maintenance":  "#2ecc71",  # modified by tomisin — matched to green theme
 }
 
 

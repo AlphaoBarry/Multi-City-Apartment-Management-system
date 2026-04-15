@@ -37,8 +37,9 @@ class AssignTicketDialog(QDialog):
         self.worker_combo = QComboBox()
         self.worker_combo.setStyleSheet("QComboBox { padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; }")
         
-        # Load workers
-        workers = [u for u in get_users() if u.get("role") == "maintenance"]
+        # modified by tomisin — filter workers by city branch (security: local-only assignment)
+        branch = parent.current_user.get("city_branch")
+        workers = [u for u in get_users(city_branch=branch) if u.get("role") == "maintenance"]
         for w in workers:
             self.worker_combo.addItem(f"{w.get('first_name', '')} {w.get('last_name', '')}", w.get("user_id"))
             
@@ -155,7 +156,12 @@ class WorkerAvailabilityView(QWidget):
         self.load_data()
 
     def load_data(self):
-        data = get_worker_availability()
+        # modified by tomisin — restricted to user's city branch only
+        branch = None
+        if self.main_app and self.main_app.current_user:
+            branch = self.main_app.current_user.get("city_branch")
+        
+        data = get_worker_availability(city_branch=branch)
         cols = ["WORKER NAME", "ACTIVE TASKS", "AVAILABILITY STATUS"]
         self.table.setColumnCount(len(cols))
         self.table.setRowCount(len(data))
@@ -220,8 +226,12 @@ class CostTrackingView(QWidget):
         self.load_data()
 
     def load_data(self):
-        # 1. Load Stats
-        summary = get_maintenance_financial_summary()
+        # modified by tomisin — restricted financial summary to user's city branch
+        branch = None
+        if self.main_app and self.main_app.current_user:
+            branch = self.main_app.current_user.get("city_branch")
+            
+        summary = get_maintenance_financial_summary(city_name=branch)
         
         # Clear existing cards
         while self.stats_layout.count():
@@ -239,7 +249,7 @@ class CostTrackingView(QWidget):
             self.stats_layout.addWidget(card)
 
         # 2. Load Table
-        data = get_maintenance_cost_report()
+        data = get_maintenance_cost_report(city_name=branch)
         cols = ["TICKET ID", "ISSUE", "WORKER", "MATERIALS COST", "TIME (HRS)"]
         self.table.setColumnCount(len(cols))
         self.table.setRowCount(len(data))
@@ -412,6 +422,9 @@ class MaintenancePage(QWidget):
             full = f"{fname} {lname}".strip()
             if full:
                 display_name = full
+        
+        # modified by tomisin — dynamic city-based dashboard title
+        self.branch_city = self.current_user.get("city_branch", "Local") if self.current_user else "Local"
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -419,7 +432,7 @@ class MaintenancePage(QWidget):
 
         # ── Sidebar ──────────────────────────────────────────────────────
         self.sidebar = Sidebar(
-            role="Maintenance Staff",
+            role="Maintenance",
             display_name=display_name
         )
         self.sidebar.logout_signal.connect(self._logout)
@@ -465,41 +478,13 @@ class MaintenancePage(QWidget):
     # ── Header ────────────────────────────────────────────────────────────
     def _build_header(self):
         header_layout = QHBoxLayout()
-        title = QLabel("Maintenance Dashboard")
+        # modified by tomisin — shows city-specific title e.g. 'Bristol Maintenance Dashboard'
+        title = QLabel(f"{self.branch_city} Maintenance Dashboard")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
         header_layout.addWidget(title)
-        
-        header_layout.addStretch()
-        
-        # added by tomisin - Debug simulator
-        debug_btn = QPushButton("🛠️ Debug: Simulate Front Desk Request")
-        debug_btn.setStyleSheet("padding: 8px 12px; background: #34495e; color: white; border-radius: 6px; font-weight: 500;")
-        debug_btn.clicked.connect(self._simulate_request)
-        header_layout.addWidget(debug_btn)
-        
+
         self.content_layout.addLayout(header_layout)
 
-    def _simulate_request(self):
-        # Fetch first available apartment to avoid data errors
-        apts = get_apartments()
-        if not apts:
-            QMessageBox.critical(self, "Error", "No apartments found in database to link ticket to.")
-            return
-            
-        apt_id = apts[0]["apt_id"]
-        issues = ["Leaking faucet in kitchen", "Radiator not heating up", "Loose floorboard", "Broken window latch"]
-        import random
-        
-        ticket_id = log_maintenance_request(
-            apt_id=apt_id,
-            description=random.choice(issues) + " (SIMULATED)",
-            priority=random.choice(["low", "medium", "high"]),
-            reported_by=None # Simulated as anonymous or system
-        )
-        
-        if ticket_id:
-            QMessageBox.information(self, "Simulation Success", f"New ticket logged: {ticket_id[:8]}")
-            self.load_tickets()
 
     # ── Stat Cards ────────────────────────────────────────────────────────
     def _build_stat_cards(self):
@@ -515,8 +500,9 @@ class MaintenancePage(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
-        # added by tomisin
-        stats = get_dashboard_stats("Maintenance Staff")
+        # modified by tomisin — stats now filtered to user's city branch
+        branch = self.current_user.get("city_branch") if self.current_user else None
+        stats = get_dashboard_stats("Maintenance", city_branch=branch)
         card_data = [
             (str(stats["active_requests"]),      "Active Requests",      "↑ 5%",  "#e67e22"),
             (str(stats["completed_this_month"]),  "Completed This Month", "↑ 12%", "#27ae60"),
@@ -594,8 +580,9 @@ class MaintenancePage(QWidget):
         self._load_active_table()
 
     def _load_active_table(self, priority_filter="All Priorities"):
-        # added by tomisin
-        active = [m for m in get_maintenance_tickets() if m["status"] not in ["resolved", "closed"]]
+        # modified by tomisin — active tickets filtered to user's city branch
+        branch = self.current_user.get("city_branch") if self.current_user else None
+        active = [m for m in get_maintenance_tickets(city_name=branch) if m["status"] not in ["resolved", "closed"]]
         if priority_filter != "All Priorities":
             active = [m for m in active if str(m.get("priority", "")).lower() == priority_filter.lower()]
             
@@ -658,8 +645,9 @@ class MaintenancePage(QWidget):
         self._load_completed_table()
 
     def _load_completed_table(self):
-        # added by tomisin
-        completed = [m for m in get_maintenance_tickets() if m["status"] in ["resolved", "closed"]]
+        # modified by tomisin — completed tickets filtered to user's city branch
+        branch = self.current_user.get("city_branch") if self.current_user else None
+        completed = [m for m in get_maintenance_tickets(city_name=branch) if m["status"] in ["resolved", "closed"]]
         cols = ["REQUEST ID", "ISSUE", "WORKER", "TIME SPENT", "COST", "COMPLETED", "ACTIONS"]
         self.completed_table.setColumnCount(len(cols))
         self.completed_table.setRowCount(len(completed))

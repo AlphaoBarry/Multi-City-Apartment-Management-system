@@ -56,6 +56,9 @@ def seed():
             (nid(), "finance_bris",     hash_password("Finance@123"),    "finance",     "James",   "Wilson",  "james.w@pams.co.uk",   "Bristol"),
             (nid(), "maint_bris",       hash_password("Maint@123"),      "maintenance", "Tom",     "Davies",  "tom.d@pams.co.uk",     "Bristol"),
             (nid(), "admin_london",     hash_password("Admin@456"),      "admin",       "Rachel",  "Smith",   "rachel.s@pams.co.uk",  "London"),
+            # added by tomisin — London and Manchester maintenance staff for city-based access control
+            (nid(), "maint_london",     hash_password("Maint@456"),      "maintenance", "James",   "Bond",    "james.b@pams.co.uk",   "London"),
+            (nid(), "maint_man",        hash_password("Maint@789"),      "maintenance", "Liam",    "Miller",  "liam.m@pams.co.uk",    "Manchester"),
         ]
         conn.executemany(
             """INSERT OR IGNORE INTO users
@@ -131,12 +134,16 @@ def seed():
             invoices
         )
 
-        # 7. Maintenance Ticket
-        conn.execute(
+        # modified by tomisin — expanded to multi-city tickets for city-based filtering verification
+        conn.executemany(
             """INSERT OR IGNORE INTO maintenance_tickets
                (ticket_id, apt_id, description, priority, status)
                VALUES (?,?,?,?,?)""",
-            (nid(), apt_ids[3], "Boiler not heating — tenants reporting cold water", "high", "open")
+            [
+                (nid(), apt_ids[3], "Boiler not heating — Bristol", "high", "open"),
+                (nid(), apt_ids[4], "Leaking faucet in kitchen — London", "medium", "open"),
+                (nid(), apt_ids[5], "Broken window lock — London branch", "low", "assigned")
+            ]
         )
 
         print("[OK] PAMS database seeded successfully.")
