@@ -40,7 +40,6 @@ ROLE_MENUS = {
     # modified by tomisin — renamed from 'Maintenance Staff' to 'Maintenance'
     "Maintenance": {
         "OVERVIEW":     ["Dashboard"],
-        "WORK ORDERS":  ["Active Requests", "Scheduled Tasks", "Completed Tasks", "Emergency Requests"],
         "RESOURCES":    ["Worker Availability", "Equipment", "Cost Tracking"],
         "SYSTEM":       ["Logout"],
     },
