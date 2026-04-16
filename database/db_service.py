@@ -678,6 +678,8 @@ def create_lease(tenant_id: str, apt_id: str, start_date: str, end_date: str, re
         
         if active_leases >= capacity:
             # Auto-flip status to occupied just in case it wasn't already, and reject the lease
+            # ALSO clear any reservation locks to avoid dangling state
+            conn.execute("DELETE FROM apartment_reservations WHERE apt_id = ?", (apt_id,))
             conn.execute("UPDATE apartments SET status = 'occupied', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?", (apt_id,))
             raise ValueError("Cannot assign lease: Apartment is already at max capacity")
 
@@ -691,6 +693,10 @@ def create_lease(tenant_id: str, apt_id: str, start_date: str, end_date: str, re
         # After successful assignment, recount active leases
         new_active_leases = active_leases + 1
         new_status = 'occupied' if new_active_leases >= capacity else 'available'
+        
+        # Clear any front-desk reservation locks now that lease is confirmed
+        conn.execute("DELETE FROM apartment_reservations WHERE apt_id = ?", (apt_id,))
+        
         conn.execute(
             "UPDATE apartments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
             (new_status, apt_id)
@@ -981,7 +987,7 @@ def get_manager_financial_report() -> dict:
         "net_profit": collected - expenses - maint_cost
     }
 
-def get_maintenance_cost_report() -> list[dict]:
+def get_maintenance_cost_report(city_name: str = None) -> list[dict]:
     sql = """
         SELECT m.ticket_id, m.description, 
                (u.first_name || ' ' || u.last_name) as worker_name,
@@ -989,11 +995,19 @@ def get_maintenance_cost_report() -> list[dict]:
                m.materials_cost
         FROM maintenance_tickets m
         LEFT JOIN users u ON m.assigned_to = u.user_id
-        WHERE m.status IN ('resolved', 'closed')
-        ORDER BY m.resolved_at DESC
     """
+    params = []
+    if city_name:
+        sql += " JOIN apartments a ON m.apt_id = a.apt_id JOIN cities c ON a.city_id = c.city_id "
+        sql += " WHERE m.status IN ('resolved', 'closed') AND c.name = ?"
+        params.append(city_name)
+    else:
+        sql += " WHERE m.status IN ('resolved', 'closed')"
+        
+    sql += " ORDER BY m.resolved_at DESC"
+    
     with get_db() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 def get_recent_transactions(limit=10) -> list[dict]:
@@ -1100,7 +1114,7 @@ def export_manager_reports_csv(report_type: str, output_path: str = None, city_i
 
 
 #CODE BY TOMISIN
-def get_worker_availability() -> list[dict]:
+def get_worker_availability(city_branch: str = None) -> list[dict]:
     # added by tomisin
     """Get active ticket counts for all maintenance workers."""
     sql = """
@@ -1109,12 +1123,19 @@ def get_worker_availability() -> list[dict]:
         FROM users u
         LEFT JOIN maintenance_tickets m ON u.user_id = m.assigned_to 
              AND m.status IN ('assigned', 'in_progress')
-        WHERE u.role = 'maintenance' AND u.is_active = 1
+        WHERE u.role IN ('maintenance', 'Maintenance Staff') AND u.is_active = 1
+    """
+    params = []
+    if city_branch:
+        sql += " AND u.city_branch = ?"
+        params.append(city_branch)
+        
+    sql += """
         GROUP BY u.user_id
         ORDER BY active_tickets ASC
     """
     with get_db() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 
@@ -1162,22 +1183,31 @@ def add_equipment(name: str, category: str, quantity: int, status: str = "Good")
     return item_id
 
 
-def get_maintenance_financial_summary() -> dict:
+def get_maintenance_financial_summary(city_name: str = None) -> dict:
     # added by tomisin
     """Detailed financial summary specifically for the Maintenance dashboard."""
+    join_clause = ""
+    where_clause = ""
+    params = []
+    if city_name:
+        join_clause = " JOIN apartments a ON m.apt_id = a.apt_id JOIN cities c ON a.city_id = c.city_id "
+        where_clause = " AND c.name = ?"
+        params = [city_name]
+
     with get_db() as conn:
         total_spend = conn.execute(
-            "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+            f"SELECT COALESCE(SUM(m.materials_cost), 0) FROM maintenance_tickets m {join_clause} WHERE m.status IN ('resolved', 'closed'){where_clause}",
+            params
         ).fetchone()[0]
         
         avg_cost = conn.execute(
-            "SELECT COALESCE(AVG(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND materials_cost > 0"
+            f"SELECT COALESCE(AVG(m.materials_cost), 0) FROM maintenance_tickets m {join_clause} WHERE m.status IN ('resolved', 'closed') AND m.materials_cost > 0{where_clause}",
+            params
         ).fetchone()[0]
         
         monthly_spend = conn.execute(
-            """SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets 
-               WHERE status IN ('resolved', 'closed') 
-               AND date(resolved_at) >= date('now', 'start of month')"""
+            f"SELECT COALESCE(SUM(m.materials_cost), 0) FROM maintenance_tickets m {join_clause} WHERE m.status IN ('resolved', 'closed') AND date(m.resolved_at) >= date('now', 'start of month'){where_clause}",
+            params
         ).fetchone()[0]
         
     return {

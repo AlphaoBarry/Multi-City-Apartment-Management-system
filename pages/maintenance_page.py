@@ -502,7 +502,7 @@ class MaintenancePage(QWidget):
 
         # modified by tomisin — stats now filtered to user's city branch
         branch = self.current_user.get("city_branch") if self.current_user else None
-        stats = get_dashboard_stats("Maintenance", city_branch=branch)
+        stats = get_dashboard_stats("Maintenance Staff", city_branch=branch)
         card_data = [
             (str(stats["active_requests"]),      "Active Requests",      "↑ 5%",  "#e67e22"),
             (str(stats["completed_this_month"]),  "Completed This Month", "↑ 12%", "#27ae60"),

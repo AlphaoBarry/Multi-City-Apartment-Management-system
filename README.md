@@ -149,7 +149,8 @@ ASD_PAMS/
 - **Audit Log** — View all data entries/modifications with User ID and timestamp
 - **Register Apartments** — Add new properties to the portfolio
 - **Manage Apartments** — Track apartment status across cities (Note: Old manual status override logic has been replaced with strict capacity-based occupancy validation rules).
-- **Lease Capacity Rules** — System auto-manages availability status based on room type capacity limits.
+- **Lease Capacity Rules & Defense-in-Depth** — System natively blocks over-capacity assignments. It autonomously manages statuses and forces safe rollback of stranded Front-Desk reservation locks.
+- **Transient State Guarding** — Exclusively handles leases without queue timers. System-managed statuses like `reserved_pending` are mathematically fenced off from manual admin overrides.
 - **Data Backup** — Export database to CSV/SQL
 
 ### Manager (FR-5.1, FR-2.6)
@@ -160,7 +161,7 @@ ASD_PAMS/
 
 ### Front-Desk Staff (FR-2.x)
 - **Register New Tenant** — Onboard with Name, NI Number, Phone, Email, Emergency Contact
-- **Apartment Assignment** — Link tenants to specific apartments/cities
+- **Apartment Assignment (10-Minute Lock)** — Employs a strict `reserved_pending` database queue to prevent assignment race conditions when multiple walk-in staff attempt to book the same room.
 - **Lease Management** — Track start/end dates
 - **Maintenance Requests** — Log issues on behalf of tenants
 - **Tenant Inquiries** — Look up tenant information

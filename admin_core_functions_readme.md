@@ -45,6 +45,21 @@ The `db_service.py` functions natively segregate administrative logic to preserv
 ## 3. System Resilience & Data Integrity
 To elevate the codebase to production standard and eliminate architectural risks:
 
+### Concurrency & Race Condition Handling (Front Desk vs Admin)
+A significant architectural decision was implementing a **10-minute Reservation Timer** solely for Front-Desk Staff, while deliberately omitting it for the Administrator. 
+- **The Problem:** Multiple Front Desk staff at a busy physical branch could attempt to assign a walk-in tenant to the very same apartment simultaneously, creating a race condition.
+- **The Solution:** The timer mitigates this by forcing a temporary `reserved_pending` database lock on the apartment. 
+- **Admin Exemption & Separation of Concerns:** Administrators act with full authority in a deliberate, background context—they do not race against other admins for physical walk-ins. Adding the timer queue to their dashboard introduces unnecessary operational friction with no integrity benefit. This structural separation emphasizes resilient Role-Based UI mapping.
+
+### Transient Status Defences (`reserved_pending`)
+To ensure structural integrity, the `reserved_pending` state is mathematically fenced off from manual human assignment. An Admin cannot override an apartment to this status via dropdowns—it exists exclusively as a system-managed transient state utilized entirely by active Front-Desk timers. 
+
+### Defense in Depth: Capacity & Dangling Locks
+The backend `create_lease` workflow implements a "Defense in Depth" approach to capacity checking:
+- While basic status checks usually block over-assignment, if an apartment status accidentally desyncs (e.g., registers as 'available' while physically at max tenant capacity), a rigid secondary validation (`active_leases >= capacity`) acts as the final guard.
+- When an assignment rejection fires due to this capacity threshold, the system autonomously executes a backend `DELETE FROM apartment_reservations` to instantly clear the reservation lock in the queue. This prevents Front-Desk attempts from permanently stranding an apartment in a "dangling" `reserved_pending` state if an assignment logically aborts.
+
+
 ### Decoupled Audit Logging
 We relocated the `write_audit_log` triggers away from the volatile GUI PyQt widgets directly into the foundational Database service methods (`create_user`, `deactivate_user`, `resolve_ticket`, etc.).
 - **Security Check:** This guarantees atomicity. If a backend chron-job, API endpoint, or another page modifies the data, the tracking mechanism executes natively without failing the Separation of Concerns (SoC) principle.
