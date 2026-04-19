@@ -229,6 +229,19 @@ def get_overdue_invoices(city_branch: str = None) -> list[dict]:
     return get_invoices(status="overdue", city_branch=city_branch)
 
 
+def get_transaction_by_invoice(invoice_id: str) -> dict | None:
+    """Return the transaction row that paid the given invoice, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT payment_id, invoice_id, lease_id, tenant_id, amount, "
+            "       payment_date, method, receipt_ref, recorded_by, created_at "
+            "FROM transactions WHERE invoice_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (invoice_id,),
+        ).fetchone()
+    return _row_to_dict(row)
+
+
 def record_payment(invoice_id, lease_id, tenant_id, amount, method,
                    recorded_by=None) -> str | None:
     """

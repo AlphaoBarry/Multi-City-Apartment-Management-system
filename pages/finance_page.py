@@ -15,7 +15,8 @@ from database.db_service import (get_invoices, get_overdue_invoices,
                                   get_dashboard_stats, record_payment,
                                   get_expenses, record_expense,
                                   get_city_id_by_name,
-                                  get_financial_report, get_monthly_revenue)
+                                  get_financial_report, get_monthly_revenue,
+                                  get_transaction_by_invoice, write_audit_log)
 
 
 class FinancePage(QWidget):
@@ -642,11 +643,11 @@ class FinancePage(QWidget):
         table.setHorizontalHeaderLabels(cols)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(36)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setFixedHeight(min(40 * len(invoices) + 36, 300))
 
         status_colors = {"paid": "#27ae60", "pending": "#e67e22", "overdue": "#e74c3c"}
-        action_map = {"paid": "View   Receipt", "pending": "View   Remind", "overdue": "View   Send Notice"}
 
         for r, inv in enumerate(invoices):
             table.setItem(r, 0, QTableWidgetItem(str(inv["invoice_id"])[:16]))
@@ -657,7 +658,108 @@ class FinancePage(QWidget):
             status_item = QTableWidgetItem(f"● {status.capitalize()}")
             status_item.setForeground(QColor(status_colors.get(status, "#718096")))
             table.setItem(r, 4, status_item)
-            table.setItem(r, 5, QTableWidgetItem(action_map.get(status, "View")))
+            table.setCellWidget(r, 5, self._build_action_cell(inv))
+
+    def _build_action_cell(self, inv: dict) -> QWidget:
+        """Build a per-row widget with context-aware action buttons."""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(4, 2, 4, 2)
+        h.setSpacing(6)
+
+        btn_style = (
+            "QPushButton { background-color: white; color: #2d3748; "
+            "border: 1px solid #cbd5e0; border-radius: 6px; "
+            "padding: 3px 10px; font-size: 11px; } "
+            "QPushButton:hover { background-color: #edf2f7; }"
+        )
+
+        view = QPushButton("View")
+        view.setStyleSheet(btn_style)
+        view.clicked.connect(lambda _=None, i=inv: self._on_view_invoice(i))
+        h.addWidget(view)
+
+        status = inv["status"]
+        if status == "pending":
+            b = QPushButton("Remind")
+            b.clicked.connect(lambda _=None, i=inv: self._on_remind_tenant(i))
+        elif status == "overdue":
+            b = QPushButton("Send Notice")
+            b.clicked.connect(lambda _=None, i=inv: self._on_send_notice(i))
+        elif status == "paid":
+            b = QPushButton("Receipt")
+            b.clicked.connect(lambda _=None, i=inv: self._on_view_receipt(i))
+        else:
+            b = None
+
+        if b is not None:
+            b.setStyleSheet(btn_style)
+            h.addWidget(b)
+
+        h.addStretch()
+        return w
+
+    def _on_view_invoice(self, inv: dict):
+        lines = [
+            f"Invoice ID : {inv['invoice_id']}",
+            f"Tenant     : {inv['tenant_name']}",
+            f"Amount Due : £{inv['amount_due']:,.2f}",
+            f"Due Date   : {inv['due_date']}",
+            f"Status     : {inv['status'].capitalize()}",
+            f"Lease ID   : {inv['lease_id']}",
+        ]
+        if inv["status"] == "paid":
+            tx = get_transaction_by_invoice(inv["invoice_id"])
+            if tx:
+                lines += [
+                    "",
+                    f"Receipt    : {tx['receipt_ref']}",
+                    f"Paid on    : {tx['payment_date']}",
+                    f"Method     : {tx['method']}",
+                    f"Amount     : £{tx['amount']:,.2f}",
+                ]
+        QMessageBox.information(self, "Invoice Details", "\n".join(lines))
+
+    def _on_remind_tenant(self, inv: dict):
+        if self.current_user_id:
+            write_audit_log(self.current_user_id, "REMIND_TENANT",
+                            "invoices", inv["invoice_id"])
+        QMessageBox.information(
+            self, "Reminder Logged",
+            f"Reminder logged for {inv['tenant_name']} (invoice "
+            f"{str(inv['invoice_id'])[:8]}). The action has been recorded "
+            "in the audit log.",
+        )
+
+    def _on_send_notice(self, inv: dict):
+        if self.current_user_id:
+            write_audit_log(self.current_user_id, "SEND_OVERDUE_NOTICE",
+                            "invoices", inv["invoice_id"])
+        QMessageBox.information(
+            self, "Overdue Notice Logged",
+            f"Overdue notice logged for {inv['tenant_name']} (invoice "
+            f"{str(inv['invoice_id'])[:8]}). The action has been recorded "
+            "in the audit log.",
+        )
+
+    def _on_view_receipt(self, inv: dict):
+        tx = get_transaction_by_invoice(inv["invoice_id"])
+        if not tx:
+            QMessageBox.warning(self, "No Receipt",
+                                "This invoice is marked paid but no "
+                                "transaction row was found.")
+            return
+        QMessageBox.information(
+            self, "Receipt",
+            "\n".join([
+                f"Receipt Ref : {tx['receipt_ref']}",
+                f"Tenant      : {inv['tenant_name']}",
+                f"Invoice     : {str(inv['invoice_id'])[:16]}",
+                f"Amount      : £{tx['amount']:,.2f}",
+                f"Paid on     : {tx['payment_date']}",
+                f"Method      : {tx['method']}",
+            ]),
+        )
 
     def _add_report_placeholder(self, lay):
         header_row = QHBoxLayout()
