@@ -1,7 +1,7 @@
 import pytest
 import sys
 from PyQt5.QtWidgets import QApplication
-from pages.admin_page import CreateUserDialog, RegisterApartmentDialog
+from pages.admin_page import CreateUserDialog, RegisterApartmentDialog, AssignLeaseDialog
 
 # PyQt requires a QApplication instance before any QWidget can be instantiated.
 @pytest.fixture(scope="module", autouse=True)
@@ -68,4 +68,16 @@ def test_tc_a11_register_apartment_no_type(qapp):
         pass
 
     # The prompt explicitly specifies testing get_data() returning None
+    assert dialog.get_data() is None
+
+def test_tc_a17_assign_lease_invalid_date(qapp):
+    """TC-A17: Admin assigns lease with invalid date format."""
+    # Note: We pass "Bristol" or something as current_city.
+    # The dialog might try to call get_tenants_by_city which uses the DB.
+    # Our conftest.py should handle in-memory DB setup if we've initialized it.
+    dialog = AssignLeaseDialog("Bristol")
+    dialog.start_date.setText("2025-01-2025") # Invalid format
+    dialog.end_date.setText("2026-01-01")
+    dialog.rent.setText("1000.00")
+    
     assert dialog.get_data() is None

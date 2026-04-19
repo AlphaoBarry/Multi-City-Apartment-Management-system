@@ -320,11 +320,17 @@ class AssignLeaseDialog(QDialog):
 
     def get_data(self):
         try:
+            start_d = self.start_date.text().strip()
+            end_d = self.end_date.text().strip()
+            # Strict date format validation
+            datetime.strptime(start_d, "%Y-%m-%d")
+            datetime.strptime(end_d, "%Y-%m-%d")
+
             return {
                 "tenant_id": self.tenant_combo.currentData(),
                 "apt_id": self.apt_combo.currentData(),
-                "start_date": self.start_date.text(),
-                "end_date": self.end_date.text(),
+                "start_date": start_d,
+                "end_date": end_d,
                 "rent_amount": float(self.rent.text())
             }
         except ValueError:
@@ -685,6 +691,12 @@ class AdminPage(QWidget):
             upd_btn.clicked.connect(lambda checked, apt=a: self._on_update_apartment(apt))
             actions_layout.addWidget(upd_btn)
             
+            if a['status'] != 'inactive':
+                deact_btn = QPushButton("Deactivate")
+                deact_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                deact_btn.clicked.connect(lambda checked, aid=a['apt_id']: self._on_deactivate_apartment(aid))
+                actions_layout.addWidget(deact_btn)
+            
             self.apts_table.setCellWidget(r, 4, actions_widget)
 
     def _build_track_leases(self, layout):
@@ -981,6 +993,17 @@ class AdminPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
+    def _on_deactivate_apartment(self, apt_id: str):
+        if QMessageBox.question(self, "Confirm Deactivation", "Are you sure you want to deactivate this apartment?") == QMessageBox.Yes:
+            try:
+                soft_delete_apartment(apt_id, operated_by=self.current_user_id)
+                self.refresh_all_data()
+                QMessageBox.information(self, "Success", "Apartment deactivated successfully.")
+            except ValueError as ve:
+                QMessageBox.warning(self, "Constraint Violation", str(ve))
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
     def _on_edit_tenant(self, tenant_data: dict):
         dlg = EditTenantDialog(tenant_data, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -1026,7 +1049,9 @@ class AdminPage(QWidget):
         dlg.exec_()
 
     def _on_update_ticket_status(self, ticket_id: str, current_status: str):
-        dlg = UpdateMaintenanceStatusDialog(current_status, parent=self)
+        # Normalize status for UI dialog (DB uses 'open', UI uses 'Reported')
+        ui_status = "Reported" if current_status.lower() == 'open' else current_status.title()
+        dlg = UpdateMaintenanceStatusDialog(ui_status, parent=self)
         if dlg.exec_() == QDialog.Accepted:
             data = dlg.get_data()
             new_status = data['status'].lower()
@@ -1038,7 +1063,7 @@ class AdminPage(QWidget):
                         QMessageBox.warning(self, "Invalid Status", "Only 'Resolved' tickets can be closed.")
                 elif new_status == 'resolved':
                     success = resolve_ticket(ticket_id, notes=data['notes'] or "", operated_by=self.current_user_id)
-                elif new_status == 'open':
+                elif new_status in ['open', 'reported']:
                     success = reopen_ticket(ticket_id, operated_by=self.current_user_id)
                 elif new_status in ['assigned', 'in progress']:
                     QMessageBox.information(self, "Not Allowed", f"Admin cannot arbitrarily revert to '{new_status}'.")
