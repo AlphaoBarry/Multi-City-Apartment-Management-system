@@ -204,7 +204,8 @@ def get_invoices(status=None, city_branch: str = None) -> list[dict]:
     sql = """
         SELECT i.invoice_id, i.amount_due, i.due_date, i.status, i.generated_at,
                (t.first_name || ' ' || t.last_name) AS tenant_name,
-               i.tenant_id, i.lease_id
+               i.tenant_id, i.lease_id,
+               a.room_type, a.apt_id
         FROM invoices i
         JOIN tenants    t ON i.tenant_id = t.tenant_id
         JOIN leases     l ON i.lease_id  = l.lease_id

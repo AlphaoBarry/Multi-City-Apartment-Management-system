@@ -700,9 +700,12 @@ class FinancePage(QWidget):
         return w
 
     def _on_view_invoice(self, inv: dict):
+        apt_type = inv.get('room_type', '').replace('_', ' ').title()
+        apt_id_short = str(inv.get('apt_id', ''))[:8]
         lines = [
             f"Invoice ID : {inv['invoice_id']}",
             f"Tenant     : {inv['tenant_name']}",
+            f"Apartment  : {apt_type} ({apt_id_short})",
             f"Amount Due : £{inv['amount_due']:,.2f}",
             f"Due Date   : {inv['due_date']}",
             f"Status     : {inv['status'].capitalize()}",
@@ -749,11 +752,14 @@ class FinancePage(QWidget):
                                 "This invoice is marked paid but no "
                                 "transaction row was found.")
             return
+        apt_type = inv.get('room_type', '').replace('_', ' ').title()
+        apt_id_short = str(inv.get('apt_id', ''))[:8]
         QMessageBox.information(
             self, "Receipt",
             "\n".join([
                 f"Receipt Ref : {tx['receipt_ref']}",
                 f"Tenant      : {inv['tenant_name']}",
+                f"Apartment   : {apt_type} ({apt_id_short})",
                 f"Invoice     : {str(inv['invoice_id'])[:16]}",
                 f"Amount      : £{tx['amount']:,.2f}",
                 f"Paid on     : {tx['payment_date']}",
