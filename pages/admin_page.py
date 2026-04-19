@@ -27,7 +27,7 @@ from database.db_service import (
     get_leases_by_city, create_lease, get_tenants_by_city, update_tenant,
     get_occupancy_report, get_financial_summary_by_city, get_maintenance_tickets,
     get_city_id_by_name, backup_database, register_tenant, resolve_ticket, close_ticket, reopen_ticket,
-    export_reports_csv, process_early_leave
+    export_reports_csv, process_early_leave, expire_leases, terminate_lease
 )
 
 
@@ -453,6 +453,14 @@ class AdminPage(QWidget):
 
         self.pages = {}
         self._init_pages()
+
+        # Auto-expire any leases whose end_date has already passed
+        expired = expire_leases(operated_by=self.current_user_id)
+        if expired:
+            # Reload the table so it reflects the newly expired rows
+            if hasattr(self, 'leases_table'):
+                self._load_leases_table()
+
         self._on_page_changed("Dashboard")
 
     def _init_pages(self):
@@ -714,38 +722,70 @@ class AdminPage(QWidget):
         self.leases_table.setRowCount(len(leases))
         self.leases_table.setHorizontalHeaderLabels(cols)
         self.leases_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.leases_table.setFixedHeight(min(40 * len(leases) + 36, 400))
+        self.leases_table.setFixedHeight(min(44 * len(leases) + 36, 500))
         for r, l in enumerate(leases):
             self.leases_table.setItem(r, 0, QTableWidgetItem(l['tenant_name']))
             self.leases_table.setItem(r, 1, QTableWidgetItem(f"{l['room_type']} (Fl {l['floor_number']})"))
-            self.leases_table.setItem(r, 2, QTableWidgetItem(f"£{l['rent_amount']}"))
+            self.leases_table.setItem(r, 2, QTableWidgetItem(f"\xa3{l['rent_amount']}"))
             self.leases_table.setItem(r, 3, QTableWidgetItem(str(l['start_date'])))
             self.leases_table.setItem(r, 4, QTableWidgetItem(str(l['end_date'])))
-            
-            status = l['status']
-            if status == 'active' and l['end_date']:
+
+            # ── Colour-coded status badge ──────────────────────────────────
+            db_status = l['status']
+            display_status = db_status
+            status_color = "#718096"
+
+            if db_status == 'active':
                 try:
                     ed = datetime.strptime(str(l['end_date']), "%Y-%m-%d").date()
-                    if (ed - datetime.now().date()).days <= 30:
-                        status = "⏳ Expiring Soon"
+                    days_left = (ed - datetime.now().date()).days
+                    if days_left <= 30:
+                        display_status = "\u23f3 Expiring Soon"
+                        status_color = "#e67e22"
+                    else:
+                        display_status = "active"
+                        status_color = "#27ae60"
                 except Exception:
-                    pass
-            
-            status_item = QTableWidgetItem(status)
-            if "Expiring" in status:
-                status_item.setForeground(QColor("#e74c3c"))
+                    display_status = "active"
+                    status_color = "#27ae60"
+            elif db_status == 'expired':
+                display_status = "expired"
+                status_color = "#95a5a6"
+            elif db_status == 'terminated':
+                display_status = "terminated"
+                status_color = "#e74c3c"
+            elif db_status == 'reserved_pending':
+                display_status = "reserved"
+                status_color = "#3498db"
+
+            status_item = QTableWidgetItem(display_status)
+            status_item.setForeground(QColor(status_color))
             self.leases_table.setItem(r, 5, status_item)
-            
+
+            # ── Action buttons ─────────────────────────────────────────────
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(4, 2, 4, 2)
-            
-            if l['status'] == 'active' and "Expiring" not in status:
-                leave_btn = QPushButton("Early Leave")
-                leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
-                leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))
-                actions_layout.addWidget(leave_btn)
-                
+            actions_layout.setSpacing(4)
+
+            if db_status == 'active':
+                if "\u23f3" not in display_status:  # don't show Early Leave when expiring soon
+                    leave_btn = QPushButton("Early Leave")
+                    leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
+                    leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))
+                    actions_layout.addWidget(leave_btn)
+
+                term_btn = QPushButton("Terminate")
+                term_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                term_btn.clicked.connect(lambda checked, lid=l['lease_id'], tname=l['tenant_name']:
+                                         self._on_terminate_lease(lid, tname))
+                actions_layout.addWidget(term_btn)
+
+            elif db_status in ('expired', 'terminated'):
+                closed_lbl = QLabel(db_status.title())
+                closed_lbl.setStyleSheet("color: #95a5a6; font-size: 11px; font-weight: bold;")
+                actions_layout.addWidget(closed_lbl)
+
             self.leases_table.setCellWidget(r, 6, actions_widget)
 
     def _build_view_tenant_info(self, layout):
@@ -1029,6 +1069,30 @@ class AdminPage(QWidget):
                 QMessageBox.information(self, "Success", "Early leave processed successfully.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
+
+    def _on_terminate_lease(self, lease_id: str, tenant_name: str):
+        """Admin: Immediately terminate an active lease."""
+        reply = QMessageBox.question(
+            self, "Confirm Lease Termination",
+            f"Terminate the lease for <b>{tenant_name}</b>?<br><br>"
+            "This will:<br>"
+            "&bull; Set lease status to <b>Terminated</b><br>"
+            "&bull; Reset the apartment to <b>Available</b><br><br>"
+            "This action <b>cannot be undone</b>.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            terminate_lease(lease_id, reason="Admin manual termination", operated_by=self.current_user_id)
+            self.refresh_all_data()
+            QMessageBox.information(self, "Lease Terminated",
+                                    f"The lease for {tenant_name} has been terminated and the apartment is now available.")
+        except ValueError as ve:
+            QMessageBox.warning(self, "Cannot Terminate", str(ve))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     def _on_register_tenant(self):
         dlg = RegisterTenantDialog(parent=self)

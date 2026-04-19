@@ -230,6 +230,114 @@ def get_overdue_invoices(city_branch: str = None) -> list[dict]:
     return get_invoices(status="overdue", city_branch=city_branch)
 
 
+def generate_monthly_invoices(city_branch: str = None, operated_by: str = None) -> dict:
+    """
+    FR-3.1 — Automatically generate monthly rent invoices for all active tenants
+    with active leases.
+
+    Idempotent: if an invoice for the current calendar month already exists for a
+    given lease, it is silently skipped — so this function is safe to call multiple
+    times in the same month without creating duplicates.
+
+    Args:
+        city_branch: If supplied, only leases whose apartment belongs to that city
+                     are processed (city-branch isolation for Finance Managers).
+        operated_by: user_id of the staff member triggering the run (for audit log).
+
+    Returns:
+        {
+            "generated": int,   # new invoices created
+            "skipped":   int,   # leases already invoiced this month
+            "failed":    int,   # leases that errored (should stay 0)
+            "details":   list   # one entry per generated invoice (tenant, amount, due_date)
+        }
+    """
+    from datetime import date
+
+    today = date.today()
+    # Due date is the last day of the current month
+    import calendar
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    due_date = date(today.year, today.month, last_day).isoformat()
+
+    # Month prefix used to detect existing invoices: 'YYYY-MM'
+    month_prefix = today.strftime("%Y-%m")
+
+    # Fetch all active leases, scoped to city if required
+    sql = """
+        SELECT l.lease_id, l.tenant_id, l.apt_id, l.rent_amount,
+               (t.first_name || ' ' || t.last_name) AS tenant_name,
+               c.name AS city_name
+        FROM leases l
+        JOIN apartments a ON l.apt_id  = a.apt_id
+        JOIN cities     c ON a.city_id = c.city_id
+        JOIN tenants    t ON l.tenant_id = t.tenant_id
+        WHERE l.status = 'active'
+    """
+    params: list = []
+    if city_branch:
+        sql += " AND c.name = ?"
+        params.append(city_branch)
+
+    generated = 0
+    skipped = 0
+    failed = 0
+    details: list[dict] = []
+
+    with get_db() as conn:
+        leases = conn.execute(sql, params).fetchall()
+
+        for lease in leases:
+            lid = lease["lease_id"]
+            tid = lease["tenant_id"]
+
+            # Idempotency check: look for any non-cancelled invoice for this
+            # lease whose due_date falls within the current month
+            existing = conn.execute(
+                """SELECT 1 FROM invoices
+                   WHERE lease_id = ?
+                     AND strftime('%Y-%m', due_date) = ?
+                     AND status != 'cancelled'
+                   LIMIT 1""",
+                (lid, month_prefix),
+            ).fetchone()
+
+            if existing:
+                skipped += 1
+                continue
+
+            # Create the invoice
+            try:
+                inv_id = _new_id()
+                conn.execute(
+                    """INSERT INTO invoices
+                       (invoice_id, lease_id, tenant_id, amount_due, due_date, status)
+                       VALUES (?, ?, ?, ?, ?, 'pending')""",
+                    (inv_id, lid, tid, lease["rent_amount"], due_date),
+                )
+                generated += 1
+                details.append({
+                    "invoice_id":  inv_id,
+                    "tenant_name": lease["tenant_name"],
+                    "amount_due":  lease["rent_amount"],
+                    "due_date":    due_date,
+                    "city_name":   lease["city_name"],
+                })
+            except Exception:
+                failed += 1
+
+    if operated_by:
+        write_audit_log(
+            operated_by,
+            "GENERATE_MONTHLY_INVOICES",
+            "invoices",
+            month_prefix,
+            details=f"generated={generated} skipped={skipped} failed={failed}",
+        )
+
+    return {"generated": generated, "skipped": skipped, "failed": failed, "details": details}
+
+
 def get_transaction_by_invoice(invoice_id: str) -> dict | None:
     """Return the transaction row that paid the given invoice, or None."""
     with get_db() as conn:
@@ -822,7 +930,7 @@ def soft_delete_apartment(apt_id: str, operated_by=None) -> bool:
 
 
 def get_leases_by_city(city_name: str) -> list[dict]:
-    """Admin: Get all leases for apartments in their city."""
+    """Admin: Get all leases for apartments in their city (all statuses)."""
     sql = """
         SELECT l.*, a.room_type, a.floor_number, c.name as city_name,
                (t.first_name || ' ' || t.last_name) AS tenant_name, t.email as tenant_email
@@ -836,6 +944,101 @@ def get_leases_by_city(city_name: str) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(sql, (city_name,)).fetchall()
     return _rows_to_dicts(rows)
+
+
+def expire_leases(operated_by: str = None) -> int:
+    """
+    Auto-expire any active lease whose end_date has passed today.
+
+    For each expired lease:
+      - Sets lease.status = 'expired'
+      - Resets the apartment to 'available' if it has no remaining active leases
+
+    Returns the number of leases that were expired.
+    """
+    from datetime import date
+    today = date.today().isoformat()
+
+    expired_count = 0
+    with get_db() as conn:
+        overdue = conn.execute(
+            """SELECT lease_id, apt_id FROM leases
+               WHERE status = 'active' AND end_date < ?""",
+            (today,),
+        ).fetchall()
+
+        for row in overdue:
+            lid, aid = row["lease_id"], row["apt_id"]
+            conn.execute(
+                "UPDATE leases SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE lease_id = ?",
+                (lid,),
+            )
+            # Free the apartment if no other active leases remain on it
+            still_active = conn.execute(
+                "SELECT COUNT(*) FROM leases WHERE apt_id = ? AND status = 'active'",
+                (aid,),
+            ).fetchone()[0]
+            if still_active == 0:
+                conn.execute(
+                    "UPDATE apartments SET status = 'available', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
+                    (aid,),
+                )
+            expired_count += 1
+
+    if expired_count and operated_by:
+        write_audit_log(
+            operated_by, "AUTO_EXPIRE_LEASES", "leases",
+            today, details=f"expired={expired_count}",
+        )
+    return expired_count
+
+
+def terminate_lease(lease_id: str, reason: str = "", operated_by: str = None) -> bool:
+    """
+    Admin: Forcibly terminate an active (or reserved_pending) lease.
+
+    - Sets lease.status = 'terminated'
+    - Resets apartment to 'available' if no other active leases remain
+    - Writes an audit log entry
+
+    Raises ValueError if the lease is not in a terminable state.
+    """
+    with get_db() as conn:
+        lease = conn.execute(
+            "SELECT lease_id, apt_id, status FROM leases WHERE lease_id = ?",
+            (lease_id,),
+        ).fetchone()
+        if not lease:
+            raise ValueError("Lease not found.")
+        if lease["status"] not in ("active", "reserved_pending"):
+            raise ValueError(
+                f"Cannot terminate a lease with status '{lease['status']}'. "
+                "Only active or reserved_pending leases can be terminated."
+            )
+
+        aid = lease["apt_id"]
+        conn.execute(
+            "UPDATE leases SET status = 'terminated', updated_at = CURRENT_TIMESTAMP WHERE lease_id = ?",
+            (lease_id,),
+        )
+        # Restore apartment to available if no active leases remain
+        still_active = conn.execute(
+            "SELECT COUNT(*) FROM leases WHERE apt_id = ? AND status = 'active'",
+            (aid,),
+        ).fetchone()[0]
+        if still_active == 0:
+            conn.execute(
+                "UPDATE apartments SET status = 'available', updated_at = CURRENT_TIMESTAMP WHERE apt_id = ?",
+                (aid,),
+            )
+
+    if operated_by:
+        write_audit_log(
+            operated_by, "TERMINATE_LEASE", "leases",
+            lease_id, details=reason or "Admin termination",
+        )
+    return True
+
 
 
 def create_lease(tenant_id: str, apt_id: str, start_date: str, end_date: str, rent_amount: float, created_by: str = None) -> str:

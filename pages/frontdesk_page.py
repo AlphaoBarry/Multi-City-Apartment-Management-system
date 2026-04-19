@@ -36,7 +36,7 @@ from database.db_service import (
     get_leases_by_city, get_tenants_by_city, get_apartments_by_city,
     register_tenant, log_maintenance_request, create_lease,
     create_apartment_reservation, release_apartment_reservation,
-    get_maintenance_tickets
+    get_maintenance_tickets, expire_leases
 )
 from datetime import datetime, timedelta
 
@@ -657,6 +657,13 @@ class FrontDeskPage(QWidget):
         self._build_recent_tenants_table()
         self._build_maintenance_table()
         self.content_layout.addStretch()
+
+        # Auto-expire any leases whose end_date has passed (idempotent, silent)
+        try:
+            uid = self.current_user.get("user_id")
+            expire_leases(operated_by=uid)
+        except Exception:
+            pass  # Never block the UI on a background housekeeping task
 
     @staticmethod
     def _resolve_city_from_user(user: dict) -> str:

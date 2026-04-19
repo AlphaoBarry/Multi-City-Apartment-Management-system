@@ -33,6 +33,7 @@ ROLE_MENUS = {
     },
     "Finance Manager": {
         "OVERVIEW":  ["Dashboard"],
+        "INVOICING": ["Monthly Invoices"],  # FR-3.1 — auto monthly rent billing
         "PAYMENTS":  ["Process Payments", "Invoices", "Late Payments", "Payment History"],
         "REPORTS":   ["Financial Reports", "Revenue Analysis", "Expense Tracking"],
         "SYSTEM":    ["Logout"],

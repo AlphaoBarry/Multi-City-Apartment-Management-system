@@ -16,7 +16,8 @@ from database.db_service import (get_invoices, get_overdue_invoices,
                                   get_expenses, record_expense,
                                   get_city_id_by_name,
                                   get_financial_report, get_monthly_revenue,
-                                  get_transaction_by_invoice, write_audit_log)
+                                  get_transaction_by_invoice, write_audit_log,
+                                  generate_monthly_invoices)
 
 
 class FinancePage(QWidget):
@@ -58,6 +59,7 @@ class FinancePage(QWidget):
         # Build each sub-page
         self._pages = {}
         self._build_dashboard_page()
+        self._build_monthly_invoices_page()   # FR-3.1
         self._build_invoices_page()
         self._build_late_payments_page()
         self._build_payment_history_page()
@@ -66,8 +68,28 @@ class FinancePage(QWidget):
         self._build_financial_reports_page()
         self._build_revenue_analysis_page()
 
+        # FR-3.1 — auto-generate monthly invoices on login (idempotent, safe)
+        self._auto_generate_monthly_invoices()
+
         # Start on Dashboard
         self.content_stack.setCurrentWidget(self._pages["Dashboard"])
+
+    # ══════════════════════════════════════════════════════════════════════
+    # FR-3.1 — AUTO-GENERATE ON LOGIN
+    # ══════════════════════════════════════════════════════════════════════
+    def _auto_generate_monthly_invoices(self):
+        """Silently run FR-3.1 generation on login — updates the banner label if present."""
+        try:
+            result = generate_monthly_invoices(
+                city_branch=self.city_branch,
+                operated_by=self.current_user_id,
+            )
+            self._last_gen_result = result
+        except Exception:
+            self._last_gen_result = None
+        # Refresh the banner if the monthly-invoices page has already been built
+        if hasattr(self, "_gen_banner"):
+            self._update_gen_banner()
 
     # ══════════════════════════════════════════════════════════════════════
     # DASHBOARD PAGE
@@ -76,10 +98,22 @@ class FinancePage(QWidget):
         page = self._make_scroll_page()
         lay = page.widget().layout()
 
-        # Header
+        # Header row with title + Generate Monthly Invoices shortcut
+        hdr = QHBoxLayout()
         title = QLabel("Financial Dashboard")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
-        lay.addWidget(title)
+        gen_btn = QPushButton("⚡ Generate Monthly Invoices")
+        gen_btn.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #00b894, stop:1 #00cec9); color: white; border-radius: 18px; "
+            "padding: 8px 18px; font-weight: bold; font-size: 12px; border: none; }"
+            "QPushButton:hover { opacity: 0.9; }"
+        )
+        gen_btn.clicked.connect(self._on_generate_monthly_invoices)
+        hdr.addWidget(title)
+        hdr.addStretch()
+        hdr.addWidget(gen_btn)
+        lay.addLayout(hdr)
 
         # Stat cards
         stats = get_dashboard_stats("Finance Manager", city_branch=self.city_branch)
@@ -123,6 +157,175 @@ class FinancePage(QWidget):
         lay.addStretch()
         self._pages["Dashboard"] = page
         self.content_stack.addWidget(page)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # MONTHLY INVOICES PAGE  (FR-3.1)
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_monthly_invoices_page(self):
+        """FR-3.1 — Dedicated page for generating & reviewing monthly rent invoices."""
+        page = self._make_scroll_page()
+        lay = page.widget().layout()
+
+        title = QLabel("Monthly Rent Invoices")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(title)
+
+        subtitle = QLabel(
+            "Automatically generates one rent invoice per active lease per calendar month.\n"
+            "Running multiple times in the same month is safe — duplicates are skipped."
+        )
+        subtitle.setStyleSheet("color: #718096; font-size: 12px;")
+        subtitle.setWordWrap(True)
+        lay.addWidget(subtitle)
+
+        # ── Generation banner (updated after each run) ────────────────────
+        self._gen_banner = QFrame()
+        self._gen_banner.setStyleSheet(
+            "QFrame { background-color: #ebf8ff; border: 1px solid #bee3f8; "
+            "border-radius: 10px; }"
+        )
+        banner_lay = QVBoxLayout(self._gen_banner)
+        banner_lay.setContentsMargins(16, 12, 16, 12)
+        self._gen_banner_label = QLabel("Click \"Generate Now\" to run invoice generation.")
+        self._gen_banner_label.setStyleSheet("color: #2b6cb0; font-size: 12px;")
+        self._gen_banner_label.setWordWrap(True)
+        banner_lay.addWidget(self._gen_banner_label)
+        lay.addWidget(self._gen_banner)
+
+        # ── Generate Now button ───────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        gen_btn = QPushButton("⚡  Generate Now")
+        gen_btn.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #00b894, stop:1 #00cec9); color: white; border-radius: 18px; "
+            "padding: 10px 24px; font-weight: bold; font-size: 13px; border: none; }"
+            "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #00997b, stop:1 #00b0b5); }"
+        )
+        gen_btn.clicked.connect(self._on_generate_monthly_invoices)
+        refresh_btn = QPushButton("Refresh Table")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_monthly_invoices_table)
+        btn_row.addWidget(gen_btn)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        # ── Summary stats row ─────────────────────────────────────────────
+        self._month_stats_frame = QFrame()
+        self._month_stats_frame.setStyleSheet(
+            "QFrame { background-color: white; border-radius: 10px; }"
+        )
+        stats_lay = QHBoxLayout(self._month_stats_frame)
+        stats_lay.setContentsMargins(16, 12, 16, 12)
+        stats_lay.setSpacing(40)
+        from datetime import date
+        month_label = QLabel(f"Month: {date.today().strftime('%B %Y')}")
+        month_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #4a5568;")
+        stats_lay.addWidget(month_label)
+        stats_lay.addStretch()
+        self._monthly_gen_count_lbl = QLabel("Generated this session: —")
+        self._monthly_gen_count_lbl.setStyleSheet("font-size: 12px; color: #27ae60; font-weight: bold;")
+        self._monthly_skip_count_lbl = QLabel("Already existed (skipped): —")
+        self._monthly_skip_count_lbl.setStyleSheet("font-size: 12px; color: #718096;")
+        stats_lay.addWidget(self._monthly_gen_count_lbl)
+        stats_lay.addWidget(self._monthly_skip_count_lbl)
+        lay.addWidget(self._month_stats_frame)
+
+        # ── This month's invoices table ───────────────────────────────────
+        section_lbl = QLabel("This Month's Rent Invoices")
+        section_lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(section_lbl)
+
+        self.monthly_invoices_table = QTableWidget()
+        self.monthly_invoices_table.setStyleSheet(self._table_style())
+        lay.addWidget(self.monthly_invoices_table)
+        self._refresh_monthly_invoices_table()
+
+        lay.addStretch()
+        self._pages["Monthly Invoices"] = page
+        self.content_stack.addWidget(page)
+
+    def _refresh_monthly_invoices_table(self):
+        """Reload the monthly-invoices table with only this calendar month's invoices."""
+        from datetime import date
+        month_prefix = date.today().strftime("%Y-%m")
+        all_inv = get_invoices(city_branch=self.city_branch)
+        this_month = [
+            i for i in all_inv
+            if str(i["due_date"]).startswith(month_prefix)
+        ]
+        self._refresh_invoice_table(self.monthly_invoices_table, this_month)
+
+    def _update_gen_banner(self):
+        """Update the status banner and summary counters after a generation run."""
+        r = getattr(self, "_last_gen_result", None)
+        if r is None:
+            return
+        g, s, f = r["generated"], r["skipped"], r["failed"]
+        from datetime import date
+        month_str = date.today().strftime("%B %Y")
+        if g > 0:
+            msg = (
+                f"✅  {g} new invoice(s) generated for {month_str}.  "
+                f"{s} lease(s) were already invoiced and skipped."
+            )
+            banner_color = "background-color: #f0fff4; border: 1px solid #9ae6b4;"
+            txt_color = "color: #276749;"
+        elif g == 0 and s > 0:
+            msg = (
+                f"ℹ️  All {s} active lease(s) already have a rent invoice for {month_str}. "
+                "No new invoices were needed."
+            )
+            banner_color = "background-color: #ebf8ff; border: 1px solid #bee3f8;"
+            txt_color = "color: #2b6cb0;"
+        else:
+            msg = "⚠️  No active leases found for your branch — no invoices generated."
+            banner_color = "background-color: #fffaf0; border: 1px solid #fbd38d;"
+            txt_color = "color: #c05621;"
+        if f:
+            msg += f"  ({f} error(s) encountered.)"
+        self._gen_banner.setStyleSheet(f"QFrame {{ {banner_color} border-radius: 10px; }}")
+        self._gen_banner_label.setStyleSheet(f"{txt_color} font-size: 12px;")
+        self._gen_banner_label.setText(msg)
+        # Update summary stats
+        self._monthly_gen_count_lbl.setText(f"Generated this session: {g}")
+        self._monthly_skip_count_lbl.setText(f"Already existed (skipped): {s}")
+
+    def _on_generate_monthly_invoices(self):
+        """Handler for the Generate Monthly Invoices button (FR-3.1)."""
+        try:
+            result = generate_monthly_invoices(
+                city_branch=self.city_branch,
+                operated_by=self.current_user_id,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Generation Error",
+                                 f"Invoice generation failed:\n{exc}")
+            return
+
+        self._last_gen_result = result
+        self._update_gen_banner()
+        self._refresh_monthly_invoices_table()
+
+        # Keep sibling tabs fresh
+        self._refresh_invoice_table(
+            self.dashboard_table, get_invoices(city_branch=self.city_branch)
+        )
+        if hasattr(self, "invoices_table"):
+            self._refresh_invoice_table(
+                self.invoices_table, get_invoices(city_branch=self.city_branch)
+            )
+
+        g = result["generated"]
+        s = result["skipped"]
+        QMessageBox.information(
+            self, "Monthly Invoice Generation — FR-3.1",
+            f"Generation complete for {__import__('datetime').date.today().strftime('%B %Y')}.\n\n"
+            f"  • New invoices created : {g}\n"
+            f"  • Leases already billed: {s}\n"
+            + (f"  • Errors               : {result['failed']}" if result["failed"] else ""),
+        )
 
     # ══════════════════════════════════════════════════════════════════════
     # INVOICES PAGE (all invoices)
