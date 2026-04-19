@@ -13,7 +13,9 @@ from PyQt5.QtGui import QColor
 from components.sidebar import Sidebar
 from database.db_service import (get_invoices, get_overdue_invoices,
                                   get_dashboard_stats, record_payment,
-                                  get_expenses, record_expense)
+                                  get_expenses, record_expense,
+                                  get_city_id_by_name,
+                                  get_financial_report, get_monthly_revenue)
 
 
 class FinancePage(QWidget):
@@ -23,6 +25,9 @@ class FinancePage(QWidget):
         super().__init__(parent)
         self.main_app = parent
         self.current_user_id = current_user["user_id"] if current_user else None
+        # City isolation: a Finance Manager sees only their branch's data.
+        self.city_branch = current_user.get("city_branch") if current_user else None
+        self.city_id = get_city_id_by_name(self.city_branch) if self.city_branch else None
 
         # Determine display name
         if current_user:
@@ -56,9 +61,9 @@ class FinancePage(QWidget):
         self._build_late_payments_page()
         self._build_payment_history_page()
         self._build_expense_tracking_page()
-        self._build_placeholder_page("Process Payments", "Select an invoice from the Invoices tab to process a payment.")
-        self._build_placeholder_page("Financial Reports", "Report generation — select a report type to proceed.")
-        self._build_placeholder_page("Revenue Analysis", "Revenue analysis charts will appear here.")
+        self._build_process_payments_page()
+        self._build_financial_reports_page()
+        self._build_revenue_analysis_page()
 
         # Start on Dashboard
         self.content_stack.setCurrentWidget(self._pages["Dashboard"])
@@ -76,7 +81,7 @@ class FinancePage(QWidget):
         lay.addWidget(title)
 
         # Stat cards
-        stats = get_dashboard_stats("Finance Manager")
+        stats = get_dashboard_stats("Finance Manager", city_branch=self.city_branch)
         card_data = [
             (str(stats.get("Rent Collected", "£0")),   "Rent Collected",   "↑ 15%", "#e67e22"),
             (str(stats.get("Pending Invoices", 0)),     "Pending Invoices", "↑ 8%",  "#e74c3c"),
@@ -109,7 +114,7 @@ class FinancePage(QWidget):
         self.dashboard_table = QTableWidget()
         self.dashboard_table.setStyleSheet(self._table_style())
         lay.addWidget(self.dashboard_table)
-        self._refresh_invoice_table(self.dashboard_table, get_invoices())
+        self._refresh_invoice_table(self.dashboard_table, get_invoices(city_branch=self.city_branch))
 
         # Financial reports placeholder
         self._add_report_placeholder(lay)
@@ -147,7 +152,7 @@ class FinancePage(QWidget):
         self.invoices_table = QTableWidget()
         self.invoices_table.setStyleSheet(self._table_style())
         lay.addWidget(self.invoices_table)
-        self._refresh_invoice_table(self.invoices_table, get_invoices())
+        self._refresh_invoice_table(self.invoices_table, get_invoices(city_branch=self.city_branch))
 
         lay.addStretch()
         self._pages["Invoices"] = page
@@ -155,7 +160,7 @@ class FinancePage(QWidget):
 
     def _on_invoice_filter_changed(self, text):
         status = None if text == "All" else text.lower()
-        data = get_invoices(status=status)
+        data = get_invoices(status=status, city_branch=self.city_branch)
         self._refresh_invoice_table(self.invoices_table, data)
 
     # ══════════════════════════════════════════════════════════════════════
@@ -177,14 +182,14 @@ class FinancePage(QWidget):
         self.late_table = QTableWidget()
         self.late_table.setStyleSheet(self._table_style())
         lay.addWidget(self.late_table)
-        self._refresh_invoice_table(self.late_table, get_overdue_invoices())
+        self._refresh_invoice_table(self.late_table, get_overdue_invoices(city_branch=self.city_branch))
 
         lay.addStretch()
         self._pages["Late Payments"] = page
         self.content_stack.addWidget(page)
 
     def _refresh_late_payments(self):
-        self._refresh_invoice_table(self.late_table, get_overdue_invoices())
+        self._refresh_invoice_table(self.late_table, get_overdue_invoices(city_branch=self.city_branch))
 
     # ══════════════════════════════════════════════════════════════════════
     # PAYMENT HISTORY PAGE
@@ -205,14 +210,14 @@ class FinancePage(QWidget):
         self.history_table = QTableWidget()
         self.history_table.setStyleSheet(self._table_style())
         lay.addWidget(self.history_table)
-        self._refresh_invoice_table(self.history_table, get_invoices(status="paid"))
+        self._refresh_invoice_table(self.history_table, get_invoices(status="paid", city_branch=self.city_branch))
 
         lay.addStretch()
         self._pages["Payment History"] = page
         self.content_stack.addWidget(page)
 
     def _refresh_payment_history(self):
-        self._refresh_invoice_table(self.history_table, get_invoices(status="paid"))
+        self._refresh_invoice_table(self.history_table, get_invoices(status="paid", city_branch=self.city_branch))
 
     # ══════════════════════════════════════════════════════════════════════
     # EXPENSE TRACKING PAGE
@@ -301,6 +306,7 @@ class FinancePage(QWidget):
             category=category,
             amount=amount,
             expense_date=expense_date,
+            city_id=self.city_id,
             description=description,
             recorded_by=self.current_user_id,
         )
@@ -314,7 +320,7 @@ class FinancePage(QWidget):
             QMessageBox.critical(self, "Error", "Failed to record expense.")
 
     def _refresh_expense_table(self):
-        expenses = get_expenses()
+        expenses = get_expenses(city_branch=self.city_branch)
         cols = ["EXPENSE ID", "CATEGORY", "AMOUNT", "DATE", "DESCRIPTION", "CITY"]
         self.expense_table.setColumnCount(len(cols))
         self.expense_table.setRowCount(len(expenses))
@@ -331,6 +337,240 @@ class FinancePage(QWidget):
             self.expense_table.setItem(r, 3, QTableWidgetItem(str(exp["expense_date"])))
             self.expense_table.setItem(r, 4, QTableWidgetItem(exp.get("description") or ""))
             self.expense_table.setItem(r, 5, QTableWidgetItem(exp.get("city_name") or ""))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PROCESS PAYMENTS PAGE
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_process_payments_page(self):
+        page = self._make_scroll_page()
+        lay = page.widget().layout()
+
+        title = QLabel("Process Payments")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(title)
+
+        # Form card
+        form = QFrame()
+        form.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
+        fl = QVBoxLayout(form)
+        fl.setContentsMargins(16, 12, 16, 12)
+
+        intro = QLabel("Select an unpaid invoice and record a payment.")
+        intro.setStyleSheet("color: #4a5568; font-size: 12px;")
+        fl.addWidget(intro)
+
+        row1 = QHBoxLayout()
+        self.pp_invoice_combo = QComboBox()
+        self.pp_invoice_combo.setStyleSheet(self._combo_style())
+        self.pp_method_combo = QComboBox()
+        self.pp_method_combo.addItems(["transfer", "card", "cash"])
+        self.pp_method_combo.setStyleSheet(self._combo_style())
+        self.pp_amount = QLineEdit()
+        self.pp_amount.setPlaceholderText("Amount (£) — blank = full invoice")
+        self.pp_amount.setStyleSheet(self._input_style())
+        row1.addWidget(QLabel("Invoice:"))
+        row1.addWidget(self.pp_invoice_combo, 3)
+        row1.addWidget(QLabel("Method:"))
+        row1.addWidget(self.pp_method_combo, 1)
+        row1.addWidget(QLabel("Amount:"))
+        row1.addWidget(self.pp_amount, 1)
+        fl.addLayout(row1)
+
+        btn = QPushButton("Record Payment")
+        btn.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #6c5ce7, stop:1 #0984e3); color: white; border-radius: 18px; "
+            "padding: 8px 18px; font-weight: bold; font-size: 12px; border: none; }"
+        )
+        btn.clicked.connect(self._on_process_payment_clicked)
+        fl.addWidget(btn)
+        lay.addWidget(form)
+
+        # Unpaid-invoices table
+        lbl = QLabel("Unpaid Invoices (scoped to your branch)")
+        lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(lbl)
+        self.pp_table = QTableWidget()
+        self.pp_table.setStyleSheet(self._table_style())
+        lay.addWidget(self.pp_table)
+
+        self.pp_invoices_map = {}
+        self._refresh_process_payments()
+
+        lay.addStretch()
+        self._pages["Process Payments"] = page
+        self.content_stack.addWidget(page)
+
+    def _refresh_process_payments(self):
+        unpaid = [i for i in get_invoices(city_branch=self.city_branch)
+                  if i["status"] in ("pending", "overdue")]
+        self.pp_invoice_combo.clear()
+        self.pp_invoices_map.clear()
+        for inv in unpaid:
+            label = (f"{str(inv['invoice_id'])[:8]} — {inv['tenant_name']} — "
+                     f"£{inv['amount_due']:,.2f} ({inv['status']})")
+            self.pp_invoices_map[label] = inv
+            self.pp_invoice_combo.addItem(label)
+        self._refresh_invoice_table(self.pp_table, unpaid)
+
+    def _on_process_payment_clicked(self):
+        label = self.pp_invoice_combo.currentText()
+        inv = self.pp_invoices_map.get(label)
+        if not inv:
+            QMessageBox.information(self, "No Invoice",
+                                    "No unpaid invoices available for your branch.")
+            return
+        raw = self.pp_amount.text().strip()
+        if raw:
+            try:
+                amount = float(raw)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Amount",
+                                    "Please enter a valid number or leave blank for full amount.")
+                return
+        else:
+            amount = inv["amount_due"]
+        receipt = record_payment(
+            invoice_id=inv["invoice_id"],
+            lease_id=inv["lease_id"],
+            tenant_id=inv["tenant_id"],
+            amount=amount,
+            method=self.pp_method_combo.currentText(),
+            recorded_by=self.current_user_id,
+        )
+        if receipt:
+            QMessageBox.information(self, "Payment Recorded",
+                                    f"Payment recorded.\nReceipt: {receipt}")
+            self.pp_amount.clear()
+            self._refresh_process_payments()
+            # Keep sibling tabs fresh
+            self._refresh_invoice_table(self.dashboard_table,
+                                        get_invoices(city_branch=self.city_branch))
+            if hasattr(self, "invoices_table"):
+                self._refresh_invoice_table(self.invoices_table,
+                                            get_invoices(city_branch=self.city_branch))
+        else:
+            QMessageBox.critical(self, "Payment Error",
+                                 "Failed to record payment. Please try again.")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # FINANCIAL REPORTS PAGE
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_financial_reports_page(self):
+        page = self._make_scroll_page()
+        lay = page.widget().layout()
+
+        title = QLabel("Financial Reports")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(title)
+
+        filters = QHBoxLayout()
+        self.rep_from = QDateEdit()
+        self.rep_from.setCalendarPopup(True)
+        self.rep_from.setDate(QDate.currentDate().addMonths(-6))
+        self.rep_from.setStyleSheet(self._combo_style())
+        self.rep_to = QDateEdit()
+        self.rep_to.setCalendarPopup(True)
+        self.rep_to.setDate(QDate.currentDate())
+        self.rep_to.setStyleSheet(self._combo_style())
+        gen_btn = QPushButton("Generate")
+        gen_btn.setStyleSheet(self._refresh_btn_style())
+        gen_btn.clicked.connect(self._on_generate_report)
+        filters.addWidget(QLabel("From:"))
+        filters.addWidget(self.rep_from)
+        filters.addWidget(QLabel("To:"))
+        filters.addWidget(self.rep_to)
+        filters.addStretch()
+        filters.addWidget(gen_btn)
+        lay.addLayout(filters)
+
+        self.rep_table = QTableWidget()
+        self.rep_table.setStyleSheet(self._table_style())
+        lay.addWidget(self.rep_table)
+        self._render_report_table(get_financial_report(city_branch=self.city_branch))
+
+        lay.addStretch()
+        self._pages["Financial Reports"] = page
+        self.content_stack.addWidget(page)
+
+    def _on_generate_report(self):
+        data = get_financial_report(
+            city_branch=self.city_branch,
+            start_date=self.rep_from.date().toString("yyyy-MM-dd"),
+            end_date=self.rep_to.date().toString("yyyy-MM-dd"),
+        )
+        self._render_report_table(data)
+
+    def _render_report_table(self, data: dict):
+        rows = [
+            ("Rent Collected",              f"£{data['total_rent_collected']:,.2f}"),
+            ("Paid Invoices Total",         f"£{data['total_paid_invoices']:,.2f}"),
+            ("Pending Invoices",            f"£{data['total_pending']:,.2f}"),
+            ("Overdue Invoices",            f"£{data['total_overdue']:,.2f}"),
+            ("Expenses",                    f"£{data['total_expenses']:,.2f}"),
+            ("Net (Collected − Expenses)",  f"£{data['net']:,.2f}"),
+        ]
+        self.rep_table.setColumnCount(2)
+        self.rep_table.setRowCount(len(rows))
+        self.rep_table.setHorizontalHeaderLabels(["METRIC", "VALUE"])
+        self.rep_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.rep_table.verticalHeader().setVisible(False)
+        self.rep_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rep_table.setFixedHeight(40 * len(rows) + 36)
+        for r, (k, v) in enumerate(rows):
+            self.rep_table.setItem(r, 0, QTableWidgetItem(k))
+            self.rep_table.setItem(r, 1, QTableWidgetItem(v))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # REVENUE ANALYSIS PAGE
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_revenue_analysis_page(self):
+        page = self._make_scroll_page()
+        lay = page.widget().layout()
+
+        title = QLabel("Revenue Analysis")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        lay.addWidget(title)
+
+        row = QHBoxLayout()
+        self.rev_year = QComboBox()
+        current_year = QDate.currentDate().year()
+        self.rev_year.addItems([str(y) for y in range(current_year, current_year - 5, -1)])
+        self.rev_year.setStyleSheet(self._combo_style())
+        self.rev_year.currentTextChanged.connect(self._refresh_revenue_table)
+        row.addWidget(QLabel("Year:"))
+        row.addWidget(self.rev_year)
+        row.addStretch()
+        lay.addLayout(row)
+
+        self.rev_table = QTableWidget()
+        self.rev_table.setStyleSheet(self._table_style())
+        lay.addWidget(self.rev_table)
+        self._refresh_revenue_table(str(current_year))
+
+        lay.addStretch()
+        self._pages["Revenue Analysis"] = page
+        self.content_stack.addWidget(page)
+
+    def _refresh_revenue_table(self, year_str: str):
+        try:
+            year = int(year_str)
+        except (TypeError, ValueError):
+            year = QDate.currentDate().year()
+        rows = get_monthly_revenue(city_branch=self.city_branch, year=year)
+        cols = ["MONTH", "COLLECTED", "EXPENSES", "NET"]
+        self.rev_table.setColumnCount(len(cols))
+        self.rev_table.setRowCount(len(rows))
+        self.rev_table.setHorizontalHeaderLabels(cols)
+        self.rev_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.rev_table.verticalHeader().setVisible(False)
+        self.rev_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rev_table.setFixedHeight(min(40 * max(len(rows), 1) + 36, 360))
+        for r, row_data in enumerate(rows):
+            self.rev_table.setItem(r, 0, QTableWidgetItem(row_data["month"]))
+            self.rev_table.setItem(r, 1, QTableWidgetItem(f"£{row_data['collected']:,.2f}"))
+            self.rev_table.setItem(r, 2, QTableWidgetItem(f"£{row_data['expenses']:,.2f}"))
+            self.rev_table.setItem(r, 3, QTableWidgetItem(f"£{row_data['net']:,.2f}"))
 
     # ══════════════════════════════════════════════════════════════════════
     # PLACEHOLDER PAGES (for sidebar items without full implementation)
@@ -445,7 +685,7 @@ class FinancePage(QWidget):
 
     def _on_record_payment(self):
         """Record payment for the first pending/overdue invoice."""
-        invoices = get_invoices()
+        invoices = get_invoices(city_branch=self.city_branch)
         unpaid = [inv for inv in invoices if inv["status"] in ("pending", "overdue")]
         if not unpaid:
             QMessageBox.information(self, "No Pending Invoices",
@@ -468,7 +708,7 @@ class FinancePage(QWidget):
             QMessageBox.critical(self, "Payment Error",
                                  "Failed to record payment. Please try again.")
         # Refresh the dashboard table
-        self._refresh_invoice_table(self.dashboard_table, get_invoices())
+        self._refresh_invoice_table(self.dashboard_table, get_invoices(city_branch=self.city_branch))
 
     # ── Shared styles ────────────────────────────────────────────────────
     @staticmethod

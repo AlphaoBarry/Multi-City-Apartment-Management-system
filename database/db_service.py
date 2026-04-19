@@ -191,32 +191,42 @@ def update_tenant(tenant_id: str, **fields) -> bool:
 # INVOICES & PAYMENTS (Finance)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_invoices(status=None) -> list[dict]:
+def get_invoices(status=None, city_branch: str = None) -> list[dict]:
     """
     Get invoices with tenant name joined.
     Returns list of dicts with keys:
         invoice_id, amount_due, due_date, status, generated_at,
         tenant_name, tenant_id, lease_id
+
+    When city_branch is supplied, results are scoped to invoices whose
+    apartment lives in that city (via leases -> apartments -> cities).
     """
     sql = """
         SELECT i.invoice_id, i.amount_due, i.due_date, i.status, i.generated_at,
                (t.first_name || ' ' || t.last_name) AS tenant_name,
                i.tenant_id, i.lease_id
         FROM invoices i
-        JOIN tenants t ON i.tenant_id = t.tenant_id
+        JOIN tenants    t ON i.tenant_id = t.tenant_id
+        JOIN leases     l ON i.lease_id  = l.lease_id
+        JOIN apartments a ON l.apt_id    = a.apt_id
+        JOIN cities     c ON a.city_id   = c.city_id
+        WHERE 1=1
     """
     params = []
     if status:
-        sql += " WHERE i.status = ?"
+        sql += " AND i.status = ?"
         params.append(status)
+    if city_branch:
+        sql += " AND c.name = ?"
+        params.append(city_branch)
     sql += " ORDER BY i.due_date DESC"
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 
-def get_overdue_invoices() -> list[dict]:
-    return get_invoices(status="overdue")
+def get_overdue_invoices(city_branch: str = None) -> list[dict]:
+    return get_invoices(status="overdue", city_branch=city_branch)
 
 
 def record_payment(invoice_id, lease_id, tenant_id, amount, method,
@@ -241,6 +251,8 @@ def record_payment(invoice_id, lease_id, tenant_id, amount, method,
                 "UPDATE invoices SET status = 'paid' WHERE invoice_id = ?",
                 (invoice_id,),
             )
+        if recorded_by:
+            write_audit_log(recorded_by, "RECORD_PAYMENT", "transactions", payment_id)
         return receipt_ref
     except Exception:
         return None
@@ -250,21 +262,28 @@ def record_payment(invoice_id, lease_id, tenant_id, amount, method,
 # EXPENSES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_expenses() -> list[dict]:
+def get_expenses(city_branch: str = None) -> list[dict]:
     """
     Get expenses with city name joined.
     Returns list of dicts with keys:
         expense_id, category, amount, expense_date, description, city_name
+
+    When city_branch is supplied, results are scoped to that city.
+    Expenses with NULL city_id are intentionally hidden from scoped views.
     """
     sql = """
         SELECT e.expense_id, e.category, e.amount, e.expense_date,
                e.description, COALESCE(c.name, '') AS city_name
         FROM expenses e
         LEFT JOIN cities c ON e.city_id = c.city_id
-        ORDER BY e.expense_date DESC
     """
+    params = []
+    if city_branch:
+        sql += " WHERE c.name = ?"
+        params.append(city_branch)
+    sql += " ORDER BY e.expense_date DESC"
     with get_db() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return _rows_to_dicts(rows)
 
 
@@ -279,7 +298,99 @@ def record_expense(category, amount, expense_date, city_id=None,
                VALUES (?,?,?,?,?,?,?)""",
             (eid, city_id, category, amount, expense_date, description, recorded_by),
         )
+    if recorded_by:
+        write_audit_log(recorded_by, "RECORD_EXPENSE", "expenses", eid)
     return eid
+
+
+def get_financial_report(city_branch: str = None,
+                         start_date: str = None,
+                         end_date: str = None) -> dict:
+    """
+    Aggregate totals for the Financial Reports tab.
+    Dates are inclusive ISO 'yyyy-mm-dd'; None means no bound.
+    """
+    w_inv, p_inv = ["1=1"], []
+    w_tx,  p_tx  = ["1=1"], []
+    w_exp, p_exp = ["1=1"], []
+    join_inv = ("JOIN leases l ON i.lease_id = l.lease_id "
+                "JOIN apartments a ON l.apt_id = a.apt_id "
+                "JOIN cities c ON a.city_id = c.city_id")
+    join_tx = ("JOIN leases l ON t.lease_id = l.lease_id "
+               "JOIN apartments a ON l.apt_id = a.apt_id "
+               "JOIN cities c ON a.city_id = c.city_id")
+    if city_branch:
+        w_inv.append("c.name = ?"); p_inv.append(city_branch)
+        w_tx.append("c.name = ?");  p_tx.append(city_branch)
+        w_exp.append("c.name = ?"); p_exp.append(city_branch)
+    if start_date:
+        w_inv.append("i.due_date >= ?");    p_inv.append(start_date)
+        w_tx.append("t.payment_date >= ?"); p_tx.append(start_date)
+        w_exp.append("e.expense_date >= ?"); p_exp.append(start_date)
+    if end_date:
+        w_inv.append("i.due_date <= ?");    p_inv.append(end_date)
+        w_tx.append("t.payment_date <= ?"); p_tx.append(end_date)
+        w_exp.append("e.expense_date <= ?"); p_exp.append(end_date)
+    with get_db() as conn:
+        collected = conn.execute(
+            f"SELECT COALESCE(SUM(t.amount),0) FROM transactions t {join_tx} "
+            f"WHERE {' AND '.join(w_tx)}", p_tx).fetchone()[0]
+        paid = conn.execute(
+            f"SELECT COALESCE(SUM(i.amount_due),0) FROM invoices i {join_inv} "
+            f"WHERE i.status='paid' AND {' AND '.join(w_inv)}", p_inv).fetchone()[0]
+        overdue = conn.execute(
+            f"SELECT COALESCE(SUM(i.amount_due),0) FROM invoices i {join_inv} "
+            f"WHERE i.status='overdue' AND {' AND '.join(w_inv)}", p_inv).fetchone()[0]
+        pending = conn.execute(
+            f"SELECT COALESCE(SUM(i.amount_due),0) FROM invoices i {join_inv} "
+            f"WHERE i.status='pending' AND {' AND '.join(w_inv)}", p_inv).fetchone()[0]
+        exp_total = conn.execute(
+            f"SELECT COALESCE(SUM(e.amount),0) FROM expenses e "
+            f"JOIN cities c ON e.city_id = c.city_id "
+            f"WHERE {' AND '.join(w_exp)}", p_exp).fetchone()[0]
+    return {
+        "total_rent_collected": collected,
+        "total_paid_invoices":  paid,
+        "total_overdue":        overdue,
+        "total_pending":        pending,
+        "total_expenses":       exp_total,
+        "net":                  collected - exp_total,
+    }
+
+
+def get_monthly_revenue(city_branch: str = None, year: int = None) -> list[dict]:
+    """
+    Monthly revenue breakdown for the Revenue Analysis tab.
+    Returns: [{"month": "2025-06", "collected": float, "expenses": float, "net": float}, ...]
+    """
+    w_tx, p_tx = ["1=1"], []
+    w_exp, p_exp = ["1=1"], []
+    if city_branch:
+        w_tx.append("c.name = ?");  p_tx.append(city_branch)
+        w_exp.append("c.name = ?"); p_exp.append(city_branch)
+    if year is not None:
+        w_tx.append("strftime('%Y', t.payment_date) = ?"); p_tx.append(str(year))
+        w_exp.append("strftime('%Y', e.expense_date) = ?"); p_exp.append(str(year))
+    join_tx = ("JOIN leases l ON t.lease_id = l.lease_id "
+               "JOIN apartments a ON l.apt_id = a.apt_id "
+               "JOIN cities c ON a.city_id = c.city_id")
+    with get_db() as conn:
+        rev = dict(conn.execute(
+            f"SELECT strftime('%Y-%m', t.payment_date) AS m, COALESCE(SUM(t.amount),0) "
+            f"FROM transactions t {join_tx} WHERE {' AND '.join(w_tx)} "
+            f"GROUP BY m", p_tx).fetchall())
+        exp = dict(conn.execute(
+            f"SELECT strftime('%Y-%m', e.expense_date) AS m, COALESCE(SUM(e.amount),0) "
+            f"FROM expenses e JOIN cities c ON e.city_id = c.city_id "
+            f"WHERE {' AND '.join(w_exp)} GROUP BY m", p_exp).fetchall())
+    months = sorted(set(rev.keys()) | set(exp.keys()))
+    return [
+        {"month": m,
+         "collected": rev.get(m, 0),
+         "expenses":  exp.get(m, 0),
+         "net":       rev.get(m, 0) - exp.get(m, 0)}
+        for m in months
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -343,18 +454,50 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
                 }
 
         if role == "Finance Manager":
-            overdue = conn.execute(
-                "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'"
-            ).fetchone()[0]
-            pending = conn.execute(
-                "SELECT COUNT(*) FROM invoices WHERE status = 'pending'"
-            ).fetchone()[0]
-            collected = conn.execute(
-                "SELECT COALESCE(SUM(amount), 0) FROM transactions"
-            ).fetchone()[0]
-            expenses = conn.execute(
-                "SELECT COALESCE(SUM(amount), 0) FROM expenses"
-            ).fetchone()[0]
+            if city_branch:
+                overdue = conn.execute(
+                    "SELECT COUNT(*) FROM invoices i "
+                    "JOIN leases l ON i.lease_id = l.lease_id "
+                    "JOIN apartments a ON l.apt_id = a.apt_id "
+                    "JOIN cities c ON a.city_id = c.city_id "
+                    "WHERE i.status = 'overdue' AND c.name = ?",
+                    (city_branch,),
+                ).fetchone()[0]
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM invoices i "
+                    "JOIN leases l ON i.lease_id = l.lease_id "
+                    "JOIN apartments a ON l.apt_id = a.apt_id "
+                    "JOIN cities c ON a.city_id = c.city_id "
+                    "WHERE i.status = 'pending' AND c.name = ?",
+                    (city_branch,),
+                ).fetchone()[0]
+                collected = conn.execute(
+                    "SELECT COALESCE(SUM(t.amount), 0) FROM transactions t "
+                    "JOIN leases l ON t.lease_id = l.lease_id "
+                    "JOIN apartments a ON l.apt_id = a.apt_id "
+                    "JOIN cities c ON a.city_id = c.city_id "
+                    "WHERE c.name = ?",
+                    (city_branch,),
+                ).fetchone()[0]
+                expenses = conn.execute(
+                    "SELECT COALESCE(SUM(e.amount), 0) FROM expenses e "
+                    "JOIN cities c ON e.city_id = c.city_id "
+                    "WHERE c.name = ?",
+                    (city_branch,),
+                ).fetchone()[0]
+            else:
+                overdue = conn.execute(
+                    "SELECT COUNT(*) FROM invoices WHERE status = 'overdue'"
+                ).fetchone()[0]
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM invoices WHERE status = 'pending'"
+                ).fetchone()[0]
+                collected = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM transactions"
+                ).fetchone()[0]
+                expenses = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM expenses"
+                ).fetchone()[0]
             return {
                 "Overdue Invoices": overdue,
                 "Pending Invoices": pending,
