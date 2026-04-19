@@ -8,6 +8,7 @@ All data is fetched from the SQLite database via database.db_service.
 Akande Bethel - 24039449
 """
 
+from __future__ import annotations
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                               QFrame, QGridLayout, QTableWidget,
                               QTableWidgetItem, QHeaderView, QPushButton,
@@ -17,7 +18,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from datetime import datetime
 from components.sidebar import Sidebar
-from components.shared_dialogs import RegisterTenantDialog, UpdateMaintenanceStatusDialog
+from components.shared_dialogs import RegisterTenantDialog, UpdateMaintenanceStatusDialog, TenantSearchDialog
 from database.db_service import (
     get_users, get_audit_log, get_dashboard_stats,
     create_user, deactivate_user, activate_user,
@@ -26,7 +27,7 @@ from database.db_service import (
     get_leases_by_city, create_lease, get_tenants_by_city, update_tenant,
     get_occupancy_report, get_financial_summary_by_city, get_maintenance_tickets,
     get_city_id_by_name, backup_database, register_tenant, resolve_ticket, close_ticket, reopen_ticket,
-    export_reports_csv, process_early_leave
+    export_reports_csv, process_early_leave, expire_leases, terminate_lease
 )
 
 
@@ -198,8 +199,11 @@ class RegisterApartmentDialog(QDialog):
 
     def get_data(self):
         try:
+            room = self.room_type.currentText().strip()
+            if not room:
+                return None
             return {
-                "room_type": self.room_type.currentText(),
+                "room_type": room,
                 "floor_number": int(self.floor.text()),
                 "monthly_rent": float(self.rent.text())
             }
@@ -316,11 +320,17 @@ class AssignLeaseDialog(QDialog):
 
     def get_data(self):
         try:
+            start_d = self.start_date.text().strip()
+            end_d = self.end_date.text().strip()
+            # Strict date format validation
+            datetime.strptime(start_d, "%Y-%m-%d")
+            datetime.strptime(end_d, "%Y-%m-%d")
+
             return {
                 "tenant_id": self.tenant_combo.currentData(),
                 "apt_id": self.apt_combo.currentData(),
-                "start_date": self.start_date.text(),
-                "end_date": self.end_date.text(),
+                "start_date": start_d,
+                "end_date": end_d,
                 "rent_amount": float(self.rent.text())
             }
         except ValueError:
@@ -443,6 +453,14 @@ class AdminPage(QWidget):
 
         self.pages = {}
         self._init_pages()
+
+        # Auto-expire any leases whose end_date has already passed
+        expired = expire_leases(operated_by=self.current_user_id)
+        if expired:
+            # Reload the table so it reflects the newly expired rows
+            if hasattr(self, 'leases_table'):
+                self._load_leases_table()
+
         self._on_page_changed("Dashboard")
 
     def _init_pages(self):
@@ -681,6 +699,12 @@ class AdminPage(QWidget):
             upd_btn.clicked.connect(lambda checked, apt=a: self._on_update_apartment(apt))
             actions_layout.addWidget(upd_btn)
             
+            if a['status'] != 'inactive':
+                deact_btn = QPushButton("Deactivate")
+                deact_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                deact_btn.clicked.connect(lambda checked, aid=a['apt_id']: self._on_deactivate_apartment(aid))
+                actions_layout.addWidget(deact_btn)
+            
             self.apts_table.setCellWidget(r, 4, actions_widget)
 
     def _build_track_leases(self, layout):
@@ -698,42 +722,85 @@ class AdminPage(QWidget):
         self.leases_table.setRowCount(len(leases))
         self.leases_table.setHorizontalHeaderLabels(cols)
         self.leases_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.leases_table.setFixedHeight(min(40 * len(leases) + 36, 400))
+        self.leases_table.setFixedHeight(min(44 * len(leases) + 36, 500))
         for r, l in enumerate(leases):
             self.leases_table.setItem(r, 0, QTableWidgetItem(l['tenant_name']))
             self.leases_table.setItem(r, 1, QTableWidgetItem(f"{l['room_type']} (Fl {l['floor_number']})"))
-            self.leases_table.setItem(r, 2, QTableWidgetItem(f"£{l['rent_amount']}"))
+            self.leases_table.setItem(r, 2, QTableWidgetItem(f"\xa3{l['rent_amount']}"))
             self.leases_table.setItem(r, 3, QTableWidgetItem(str(l['start_date'])))
             self.leases_table.setItem(r, 4, QTableWidgetItem(str(l['end_date'])))
-            
-            status = l['status']
-            if status == 'active' and l['end_date']:
+
+            # ── Colour-coded status badge ──────────────────────────────────
+            db_status = l['status']
+            display_status = db_status
+            status_color = "#718096"
+
+            if db_status == 'active':
                 try:
                     ed = datetime.strptime(str(l['end_date']), "%Y-%m-%d").date()
-                    if (ed - datetime.now().date()).days <= 30:
-                        status = "⏳ Expiring Soon"
+                    days_left = (ed - datetime.now().date()).days
+                    if days_left <= 30:
+                        display_status = "\u23f3 Expiring Soon"
+                        status_color = "#e67e22"
+                    else:
+                        display_status = "active"
+                        status_color = "#27ae60"
                 except Exception:
-                    pass
-            
-            status_item = QTableWidgetItem(status)
-            if "Expiring" in status:
-                status_item.setForeground(QColor("#e74c3c"))
+                    display_status = "active"
+                    status_color = "#27ae60"
+            elif db_status == 'expired':
+                display_status = "expired"
+                status_color = "#95a5a6"
+            elif db_status == 'terminated':
+                display_status = "terminated"
+                status_color = "#e74c3c"
+            elif db_status == 'reserved_pending':
+                display_status = "reserved"
+                status_color = "#3498db"
+
+            status_item = QTableWidgetItem(display_status)
+            status_item.setForeground(QColor(status_color))
             self.leases_table.setItem(r, 5, status_item)
-            
+
+            # ── Action buttons ─────────────────────────────────────────────
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(4, 2, 4, 2)
-            
-            if l['status'] == 'active':
-                leave_btn = QPushButton("Early Leave")
-                leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
-                leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))
-                actions_layout.addWidget(leave_btn)
-                
+            actions_layout.setSpacing(4)
+
+            if db_status == 'active':
+                if "\u23f3" not in display_status:  # don't show Early Leave when expiring soon
+                    leave_btn = QPushButton("Early Leave")
+                    leave_btn.setStyleSheet(self._action_btn_style("#e67e22"))
+                    leave_btn.clicked.connect(lambda checked, lid=l['lease_id']: self._on_early_leave(lid))
+                    actions_layout.addWidget(leave_btn)
+
+                term_btn = QPushButton("Terminate")
+                term_btn.setStyleSheet(self._action_btn_style("#e74c3c"))
+                term_btn.clicked.connect(lambda checked, lid=l['lease_id'], tname=l['tenant_name']:
+                                         self._on_terminate_lease(lid, tname))
+                actions_layout.addWidget(term_btn)
+
+            elif db_status in ('expired', 'terminated'):
+                closed_lbl = QLabel(db_status.title())
+                closed_lbl.setStyleSheet("color: #95a5a6; font-size: 11px; font-weight: bold;")
+                actions_layout.addWidget(closed_lbl)
+
             self.leases_table.setCellWidget(r, 6, actions_widget)
 
     def _build_view_tenant_info(self, layout):
         self._add_title(layout, "Tenant Information")
+        
+        search_btn = QPushButton("Search Tenants")
+        search_btn.setStyleSheet("background-color: #3498db; color: white; padding: 6px 12px; font-weight: bold; border-radius: 4px;")
+        search_btn.setCursor(Qt.PointingHandCursor)
+        search_btn.clicked.connect(self._open_tenant_search)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(search_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
         self.tenants_table = QTableWidget()
         self.tenants_table.setStyleSheet(self._table_style())
         self.tenants_table.verticalHeader().setVisible(False)
@@ -801,7 +868,7 @@ class AdminPage(QWidget):
 
     def _load_occ_table(self):
         reports = get_occupancy_report(self.current_city)
-        cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "ACTIVE LEASES", "OCCUPANTS"]
+        cols = ["APT TYPE", "FLOOR", "RENT", "STATUS", "CAPACITY", "ACTIVE LEASES", "SPACES LEFT", "OCCUPANTS"]
         self.occ_table.setColumnCount(len(cols))
         self.occ_table.setRowCount(len(reports))
         self.occ_table.setHorizontalHeaderLabels(cols)
@@ -813,8 +880,10 @@ class AdminPage(QWidget):
             self.occ_table.setItem(r, 1, QTableWidgetItem(str(rep['floor_number'])))
             self.occ_table.setItem(r, 2, QTableWidgetItem(f"£{rep['monthly_rent']}"))
             self.occ_table.setItem(r, 3, QTableWidgetItem(rep['apt_status']))
-            self.occ_table.setItem(r, 4, QTableWidgetItem(str(rep['active_leases'])))
-            self.occ_table.setItem(r, 5, QTableWidgetItem(rep['occupants'] or "None"))
+            self.occ_table.setItem(r, 4, QTableWidgetItem(str(rep['capacity'])))
+            self.occ_table.setItem(r, 5, QTableWidgetItem(str(rep['active_leases'])))
+            self.occ_table.setItem(r, 6, QTableWidgetItem(str(rep['spaces_left'])))
+            self.occ_table.setItem(r, 7, QTableWidgetItem(rep['occupants'] or "None"))
 
     def _build_review_maintenance(self, layout):
         self._add_title(layout, "Review Maintenance")
@@ -826,7 +895,7 @@ class AdminPage(QWidget):
 
     def _load_maint_table(self):
         tickets = get_maintenance_tickets(city_name=self.current_city)
-        cols = ["TICKET ID", "APARTMENT", "REPORTER", "STATUS", "COST", "ACTIONS"]
+        cols = ["TICKET ID", "APARTMENT", "REPORTER", "ASSIGNED TO", "STATUS", "COST", "ACTIONS"]
         self.maint_table.setColumnCount(len(cols))
         self.maint_table.setRowCount(len(tickets))
         self.maint_table.setHorizontalHeaderLabels(cols)
@@ -837,8 +906,9 @@ class AdminPage(QWidget):
             self.maint_table.setItem(r, 0, QTableWidgetItem(str(t['ticket_id'])[:8]))
             self.maint_table.setItem(r, 1, QTableWidgetItem(f"{t['room_type']} (Fl {t['floor_number']})"))
             self.maint_table.setItem(r, 2, QTableWidgetItem(str(t['reporter_name'] or "Unknown/Unassigned")))
-            self.maint_table.setItem(r, 3, QTableWidgetItem(t['status']))
-            self.maint_table.setItem(r, 4, QTableWidgetItem(f"£{t['materials_cost']}"))
+            self.maint_table.setItem(r, 3, QTableWidgetItem(str(t['assignee_name'] or "Unknown/Unassigned")))
+            self.maint_table.setItem(r, 4, QTableWidgetItem(t['status']))
+            self.maint_table.setItem(r, 5, QTableWidgetItem(f"£{t['materials_cost']}"))
             
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
@@ -855,7 +925,7 @@ class AdminPage(QWidget):
                 lbl.setStyleSheet("color: #7f8c8d; font-size: 11px; font-weight: bold;")
                 actions_layout.addWidget(lbl)
                 
-            self.maint_table.setCellWidget(r, 5, actions_widget)
+            self.maint_table.setCellWidget(r, 6, actions_widget)
 
     def _build_audit_log_page(self, layout):
         self._add_title(layout, "Audit Log")
@@ -963,6 +1033,17 @@ class AdminPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
+    def _on_deactivate_apartment(self, apt_id: str):
+        if QMessageBox.question(self, "Confirm Deactivation", "Are you sure you want to deactivate this apartment?") == QMessageBox.Yes:
+            try:
+                soft_delete_apartment(apt_id, operated_by=self.current_user_id)
+                self.refresh_all_data()
+                QMessageBox.information(self, "Success", "Apartment deactivated successfully.")
+            except ValueError as ve:
+                QMessageBox.warning(self, "Constraint Violation", str(ve))
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
     def _on_edit_tenant(self, tenant_data: dict):
         dlg = EditTenantDialog(tenant_data, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -989,6 +1070,30 @@ class AdminPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
+    def _on_terminate_lease(self, lease_id: str, tenant_name: str):
+        """Admin: Immediately terminate an active lease."""
+        reply = QMessageBox.question(
+            self, "Confirm Lease Termination",
+            f"Terminate the lease for <b>{tenant_name}</b>?<br><br>"
+            "This will:<br>"
+            "&bull; Set lease status to <b>Terminated</b><br>"
+            "&bull; Reset the apartment to <b>Available</b><br><br>"
+            "This action <b>cannot be undone</b>.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            terminate_lease(lease_id, reason="Admin manual termination", operated_by=self.current_user_id)
+            self.refresh_all_data()
+            QMessageBox.information(self, "Lease Terminated",
+                                    f"The lease for {tenant_name} has been terminated and the apartment is now available.")
+        except ValueError as ve:
+            QMessageBox.warning(self, "Cannot Terminate", str(ve))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
     def _on_register_tenant(self):
         dlg = RegisterTenantDialog(parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -1003,8 +1108,14 @@ class AdminPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
+    def _open_tenant_search(self):
+        dlg = TenantSearchDialog(parent=self)
+        dlg.exec_()
+
     def _on_update_ticket_status(self, ticket_id: str, current_status: str):
-        dlg = UpdateMaintenanceStatusDialog(current_status, parent=self)
+        # Normalize status for UI dialog (DB uses 'open', UI uses 'Reported')
+        ui_status = "Reported" if current_status.lower() == 'open' else current_status.title()
+        dlg = UpdateMaintenanceStatusDialog(ui_status, parent=self)
         if dlg.exec_() == QDialog.Accepted:
             data = dlg.get_data()
             new_status = data['status'].lower()
@@ -1016,7 +1127,7 @@ class AdminPage(QWidget):
                         QMessageBox.warning(self, "Invalid Status", "Only 'Resolved' tickets can be closed.")
                 elif new_status == 'resolved':
                     success = resolve_ticket(ticket_id, notes=data['notes'] or "", operated_by=self.current_user_id)
-                elif new_status == 'open':
+                elif new_status in ['open', 'reported']:
                     success = reopen_ticket(ticket_id, operated_by=self.current_user_id)
                 elif new_status in ['assigned', 'in progress']:
                     QMessageBox.information(self, "Not Allowed", f"Admin cannot arbitrarily revert to '{new_status}'.")

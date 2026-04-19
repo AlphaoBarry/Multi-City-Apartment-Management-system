@@ -7,9 +7,9 @@ This document outlines the core functional updates made to the Administrator Rol
 To satisfy the **Inheritance Rule** (where Administrators inherit operational capabilities from Front-Desk Staff) while maintaining distinct UI architectures, we implemented shared dialog sub-components.
 
 ### `components/shared_dialogs.py`
-Instead of duplicating the "Register Tenant" logic on the `AdminPage` and the `FrontDeskPage`, both dashboards simply import the central `RegisterTenantDialog` form. 
-- **How it works:** When the Admin clicks "Register Tenant", it instantiates the exact same Python UI class used by the Front Desk.
-- **Database Hook:** Both views post form data to `register_tenant(...)` residing securely inside `db_service.py`.
+Instead of duplicating the "Register Tenant" and "Tenant Search" logics on the `AdminPage` and the `FrontDeskPage`, both dashboards simply import the centralized `RegisterTenantDialog` and `TenantSearchDialog` forms. 
+- **How it works:** When the Admin clicks "Register Tenant" or "Search Tenants", it instantiates the exact same Python UI class used by the Front Desk.
+- **Database Hook:** Both views reliably communicate with global service hooks (e.g. `register_tenant(...)` and `get_tenants(...)`) residing securely inside `db_service.py`.
 
 ### Maintenance Ticket Resolution
 Using the same principle, `UpdateMaintenanceStatusDialog` is a shared component explicitly built for use by both the **Administrator** (for quality control closure) and the **Maintenance Staff** (for advancing status to 'Resolved'). 
@@ -34,11 +34,31 @@ The `db_service.py` functions natively segregate administrative logic to preserv
 - **Process:** When iterating over the admin's lease table, the application automatically strips the `end_date` and measures it against `datetime.now()`.
 - **Alert:** Any lease with 30 days or less remaining automatically flips its visual status from "active" to an alarming **"⏳ Expiring Soon"** inside the main tracking table.
 
+### Occupancy & Capacity Computations
+- **Use Case:** Enhances reporting fidelity.
+- **Process:** Instead of simply returning raw tenant lists or active lease counts per apartment, the internal backend reporting natively evaluates physical property limits via `get_apartment_capacity()`.
+- **Computation:** The system statically assigns maximum capacity based on the specific `room_type`. By automatically subtracting `active_leases` from these ceilings, it computes bounded `spaces_left` parameters (always clamped using `max(0, ...)` logic). This makes the grid views and data exports self-regulating and highly detailed without human intervention.
+
 ### Soft Deletions (`soft_delete_apartment`)
 - We maintain crucial referential integrity for reporting (FR-5.1) by executing soft deletions on property management. Deleting an apartment explicitly changes its status to `inactive` rather than aggressively dropping the localized SQL row entirely. All core queries filter this out automatically whereas revenue metrics preserve historical data securely.
 
 ## 3. System Resilience & Data Integrity
 To elevate the codebase to production standard and eliminate architectural risks:
+
+### Concurrency & Race Condition Handling (Front Desk vs Admin)
+A significant architectural decision was implementing a **10-minute Reservation Timer** solely for Front-Desk Staff, while deliberately omitting it for the Administrator. 
+- **The Problem:** Multiple Front Desk staff at a busy physical branch could attempt to assign a walk-in tenant to the very same apartment simultaneously, creating a race condition.
+- **The Solution:** The timer mitigates this by forcing a temporary `reserved_pending` database lock on the apartment. 
+- **Admin Exemption & Separation of Concerns:** Administrators act with full authority in a deliberate, background context—they do not race against other admins for physical walk-ins. Adding the timer queue to their dashboard introduces unnecessary operational friction with no integrity benefit. This structural separation emphasizes resilient Role-Based UI mapping.
+
+### Transient Status Defences (`reserved_pending`)
+To ensure structural integrity, the `reserved_pending` state is mathematically fenced off from manual human assignment. An Admin cannot override an apartment to this status via dropdowns—it exists exclusively as a system-managed transient state utilized entirely by active Front-Desk timers. 
+
+### Defense in Depth: Capacity & Dangling Locks
+The backend `create_lease` workflow implements a "Defense in Depth" approach to capacity checking:
+- While basic status checks usually block over-assignment, if an apartment status accidentally desyncs (e.g., registers as 'available' while physically at max tenant capacity), a rigid secondary validation (`active_leases >= capacity`) acts as the final guard.
+- When an assignment rejection fires due to this capacity threshold, the system autonomously executes a backend `DELETE FROM apartment_reservations` to instantly clear the reservation lock in the queue. This prevents Front-Desk attempts from permanently stranding an apartment in a "dangling" `reserved_pending` state if an assignment logically aborts.
+
 
 ### Decoupled Audit Logging
 We relocated the `write_audit_log` triggers away from the volatile GUI PyQt widgets directly into the foundational Database service methods (`create_user`, `deactivate_user`, `resolve_ticket`, etc.).
@@ -81,6 +101,7 @@ When a tenant requests premature cessation of their active lease contract, the s
 - **Date Compression:** Forcefully restricts `lease.end_date` dynamically strictly using mathematical limits (Current Timestamp + 30 Days contiguous).
 - **Penalty Computation:** Automatically derives a flat 5% calculation against the static `lease.rent_amount`.
 - **Invoicing Generation:** Seamlessly builds a brand-new `pending` invoice assigned structurally exclusively to the originating `tenant_id` and respective `lease_id` due exactly on the compressed exit date.
+- **Idempotency & Re-entry Protection:** To prevent duplicate penalty compounding via accidental UI double-clicking or repeated requests, the frontend utilizes an organic strict UI lockout. When the lease's end boundary enters the 30-day "Expiring Soon" threshold (which is triggered instantly upon pressing early leave), the corresponding action button drops out of the rendering scope preventing successive redundant API calls.
 
 ## 5. Database Operations & The "Ownership Chain"
 Rather than storing all information in one massive table (which causes data duplication), PAMS uses a **Relational Database**. Information is split across organized tables (`transactions`, `leases`, `apartments`, `cities`). To generate reports, the database engine **JOINs** these tables together on the fly using Foreign Keys.

@@ -56,6 +56,11 @@ def seed():
             (nid(), "finance_bris",     hash_password("Finance@123"),    "finance",     "James",   "Wilson",  "james.w@pams.co.uk",   "Bristol"),
             (nid(), "maint_bris",       hash_password("Maint@123"),      "maintenance", "Tom",     "Davies",  "tom.d@pams.co.uk",     "Bristol"),
             (nid(), "admin_london",     hash_password("Admin@456"),      "admin",       "Rachel",  "Smith",   "rachel.s@pams.co.uk",  "London"),
+            # added by tomisin — London and Manchester maintenance staff for city-based access control
+            (nid(), "maint_london",     hash_password("Maint@456"),      "maintenance", "James",   "Bond",    "james.b@pams.co.uk",   "London"),
+            # added by bethel
+            (nid(), "frontdesk_london",     hash_password("Front@456"),      "front_desk",  "Lisa",   "Lawson",    "lisa.l@pams.co.uk",   "London"),
+            (nid(), "maint_man",        hash_password("Maint@789"),      "maintenance", "Liam",    "Miller",  "liam.m@pams.co.uk",    "Manchester"),
         ]
         conn.executemany(
             """INSERT OR IGNORE INTO users
@@ -64,6 +69,10 @@ def seed():
             users
         )
 
+        user_rows = conn.execute("""
+        SELECT user_id FROM users ORDER BY rowid
+        """).fetchall()
+        user_ids = [r["user_id"] for r in user_rows]
         # 3. Apartments (Bristol branch)
         bristol_id = city_map["Bristol"]
         london_id  = city_map["London"]
@@ -131,12 +140,16 @@ def seed():
             invoices
         )
 
-        # 7. Maintenance Ticket
-        conn.execute(
+        # modified by tomisin — expanded to multi-city tickets for city-based filtering verification
+        conn.executemany(
             """INSERT OR IGNORE INTO maintenance_tickets
-               (ticket_id, apt_id, description, priority, status)
-               VALUES (?,?,?,?,?)""",
-            (nid(), apt_ids[3], "Boiler not heating — tenants reporting cold water", "high", "open")
+               (ticket_id, apt_id,reported_by, description, priority, status)
+               VALUES (?,?,?,?,?,?)""",
+            [
+                (nid(), apt_ids[3],user_ids[2],"Boiler not heating — Bristol", "high", "open"),
+                (nid(), apt_ids[4],user_ids[7], "Leaking faucet in kitchen — London", "medium", "open"),
+                (nid(), apt_ids[5],user_ids[7],"Broken window lock — London branch", "low", "open")
+            ]
         )
 
         print("[OK] PAMS database seeded successfully.")

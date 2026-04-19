@@ -112,6 +112,18 @@ CREATE_TABLES_SQL = [
         updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """,
+#new table added by TERRENCE
+    """
+    CREATE TABLE IF NOT EXISTS apartment_reservations (
+        reservation_id  TEXT PRIMARY KEY,
+        apt_id          TEXT NOT NULL REFERENCES apartments(apt_id),
+        user_session_id TEXT NOT NULL,
+        expires_at      TIMESTAMP NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'active'
+                        CHECK(status IN ('active', 'expired', 'completed')),
+        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
 
     # ── 7. INVOICES ───────────────────────────────────────────────────────────
     """
@@ -179,6 +191,20 @@ CREATE_TABLES_SQL = [
         description     TEXT,
         recorded_by     TEXT REFERENCES users(user_id),
         created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+
+    # ── 11. EQUIPMENT (Inventory Management — added by tomisin) ──────────────
+    """
+    CREATE TABLE IF NOT EXISTS equipment (
+        item_id     TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        category    TEXT NOT NULL,                   -- e.g. 'Tools', 'Supplies', 'Parts'
+        quantity    INTEGER DEFAULT 0,
+        status      TEXT NOT NULL CHECK(status IN ('Good', 'Fair', 'Poor', 'Broken')),
+        last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """,
 
