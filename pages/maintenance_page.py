@@ -493,6 +493,19 @@ class MaintenancePage(QWidget):
         self.content_layout.addLayout(self.stat_grid)
         self._load_stat_cards()
 
+    def refresh_all(self):
+        # added by tomisin — reloads all dashboard sections without re-login
+        """Refresh every view in the maintenance dashboard in one click."""
+        from datetime import datetime
+        self._load_stat_cards()
+        self._load_active_table()
+        self._load_completed_table()
+        self.availability_view.load_data()
+        self.cost_tracking_view.load_data()
+        self.equipment_view.load_data()
+        now = datetime.now().strftime("%H:%M:%S")
+        self.last_refresh_label.setText(f"Last updated: {now}")
+
     def _load_stat_cards(self):
         # clear existing cards
         while self.stat_grid.count():
@@ -500,14 +513,18 @@ class MaintenancePage(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
+        # modified by tomisin — guard: skip loading if no user logged in yet (startup)
+        if not self.current_user:
+            return
+
         # modified by tomisin — stats now filtered to user's city branch
-        branch = self.current_user.get("city_branch") if self.current_user else None
-        stats = get_dashboard_stats("Maintenance Staff", city_branch=branch)
+        branch = self.current_user.get("city_branch")
+        stats = get_dashboard_stats("Maintenance", city_branch=branch)
         card_data = [
-            (str(stats["active_requests"]),      "Active Requests",      "↑ 5%",  "#e67e22"),
-            (str(stats["completed_this_month"]),  "Completed This Month", "↑ 12%", "#27ae60"),
-            (str(stats["avg_resolution_time"]),   "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
-            (str(stats["maintenance_costs"]),     "Maintenance Costs",    "↑ 3%",  "#3498db"),
+            (str(stats.get("active_requests",     0)),    "Active Requests",      "↑ 5%",  "#e67e22"),
+            (str(stats.get("completed_this_month", 0)),   "Completed This Month", "↑ 12%", "#27ae60"),
+            (str(stats.get("avg_resolution_time", "0h")), "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
+            (str(stats.get("maintenance_costs",   "£0")), "Maintenance Costs",    "↑ 3%",  "#3498db"),
         ]
         for i, (value, label, change, top_bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, top_bar)
@@ -550,8 +567,25 @@ class MaintenancePage(QWidget):
             "stop:0 #6c5ce7, stop:1 #0984e3); color: white; border-radius: 18px; "
             "padding: 8px 18px; font-weight: bold; font-size: 12px; border: none; }"
         )
+
+        # added by tomisin — refresh button in Work Queue header
+        refresh_btn = QPushButton("🔄  Refresh")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.setStyleSheet(
+            "QPushButton { padding: 8px 16px; background-color: #00b894; color: white; "
+            "border-radius: 18px; font-weight: 600; font-size: 12px; border: none; }"
+            "QPushButton:hover { background-color: #00a381; }"
+            "QPushButton:pressed { background-color: #008f70; }"
+        )
+        refresh_btn.clicked.connect(self.refresh_all)
+
+        self.last_refresh_label = QLabel("")
+        self.last_refresh_label.setStyleSheet("font-size: 11px; color: #a0aec0; padding-right: 6px;")
+
         row.addWidget(lbl)
         row.addStretch()
+        row.addWidget(self.last_refresh_label)
+        row.addWidget(refresh_btn)
         row.addWidget(btn)
         self.content_layout.addLayout(row)
 
