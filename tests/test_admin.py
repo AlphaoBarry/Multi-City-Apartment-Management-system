@@ -3,6 +3,10 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from pages.admin_page import CreateUserDialog, RegisterApartmentDialog, AssignLeaseDialog
 
+"""
+Akande Bethel - 24039449
+"""
+
 # PyQt requires a QApplication instance before any QWidget can be instantiated.
 @pytest.fixture(scope="module", autouse=True)
 def qapp():

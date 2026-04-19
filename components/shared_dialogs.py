@@ -10,66 +10,112 @@ Akande Bethel - 24039449
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QLineEdit,
                               QDialogButtonBox, QComboBox, QHBoxLayout, QLabel, 
                               QPushButton, QTableWidget, QTableWidgetItem, QHeaderView)
-from database.db_service import get_tenants
+from database.db_service import get_tenants, get_tenants_by_city
+
 
 class TenantSearchDialog(QDialog):
-    """Search for registered tenants"""
+    """
+    Search for registered tenants by name, NI, email, or phone.
 
-    def __init__(self, parent=None):
+    City scoping (FIX-4):
+      Pass current_user=<user dict> to filter results to the staff member's
+      city branch — e.g. a Bristol front-desk user will only see Bristol tenants.
+      Omitting current_user (Admin use-case) shows all tenants across all cities.
+    """
+
+    def __init__(self, parent=None, current_user=None):
         super().__init__(parent)
-        self.setWindowTitle("Search Tenants")
-        self.setGeometry(100, 100, 700, 400)
+        self.current_user = current_user or {}
+        # Resolve city — check both key variants to be safe
+        self._city = (
+            self.current_user.get("city_branch")
+            or self.current_user.get("city_name")
+            or ""
+        ).strip()
+
+        title = f"Search Tenants — {self._city} Branch" if self._city else "Search Tenants"
+        self.setWindowTitle(title)
+        self.setGeometry(100, 100, 700, 420)
 
         layout = QVBoxLayout(self)
 
+        # ── City scope info banner ────────────────────────────────────────
+        if self._city:
+            banner = QLabel(f"🔍  Showing tenants for:  {self._city}")
+            banner.setStyleSheet(
+                "background-color: #ebf4ff; color: #2b6cb0; "
+                "padding: 6px 12px; border-radius: 4px; font-size: 12px;"
+            )
+            layout.addWidget(banner)
+
         # ── Search Bar ────────────────────────────────────────────────────
-        search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("Search:"))
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Name, NI, Email, or Phone...")
+        self.search_input.setStyleSheet(
+            "QLineEdit { padding: 8px; border: 1px solid #e2e8f0; "
+            "border-radius: 6px; background: white; color: #2d3748; font-size: 13px; }"
+        )
         self.search_input.textChanged.connect(self._refresh_results)
-        search_layout.addWidget(self.search_input)
-        layout.addLayout(search_layout)
+        search_row.addWidget(self.search_input)
+        layout.addLayout(search_row)
 
         # ── Results Table ─────────────────────────────────────────────────
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(5)
-        self.results_table.setHorizontalHeaderLabels(["Name", "NI Number", "Email", "Phone", "Registered"])
+        self.results_table.setHorizontalHeaderLabels(
+            ["Name", "NI Number", "Email", "Phone", "Registered"]
+        )
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.results_table.verticalHeader().setVisible(False)
         layout.addWidget(self.results_table)
 
         # ── Close Button ──────────────────────────────────────────────────
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(
+            "QPushButton { background-color: #718096; color: white; "
+            "border-radius: 4px; padding: 7px 20px; font-weight: bold; border: none; } "
+            "QPushButton:hover { background-color: #5a6480; }"
+        )
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
         self._refresh_results()
 
     def _refresh_results(self):
-        """Refresh search results"""
+        """Refresh search results, scoped to city branch when set."""
         query = self.search_input.text().lower()
         self.results_table.setRowCount(0)
 
-        tenants = get_tenants()
-        results = [t for t in tenants if
-            query in f"{t.get('first_name', '')} {t.get('last_name', '')}".lower() or
-            query in t.get('ni_number', '').lower() or
-            query in t.get('email', '').lower() or
-            query in t.get('phone', '').lower()
-        ]
+        # City-scoped fetch (FIX-4): uses get_tenants_by_city() when a city
+        # branch is available, falls back to get_tenants() for admin views.
+        try:
+            tenants = get_tenants_by_city(self._city) if self._city else get_tenants()
+        except Exception:
+            tenants = get_tenants()
+
+        results = [t for t in tenants if not query or (
+            query in f"{t.get('first_name', '')} {t.get('last_name', '')}".lower()
+            or query in t.get('ni_number', '').lower()
+            or query in t.get('email', '').lower()
+            or query in (t.get('phone') or '').lower()
+        )]
 
         for row, tenant in enumerate(results):
             self.results_table.insertRow(row)
             self.results_table.setItem(row, 0, QTableWidgetItem(
-                f"{tenant.get('first_name', '')} {tenant.get('last_name', '')}"
+                f"{tenant.get('first_name', '')} {tenant.get('last_name', '')}".strip()
             ))
             self.results_table.setItem(row, 1, QTableWidgetItem(tenant.get('ni_number', '')))
             self.results_table.setItem(row, 2, QTableWidgetItem(tenant.get('email', '')))
-            self.results_table.setItem(row, 3, QTableWidgetItem(tenant.get('phone', '')))
-            
+            self.results_table.setItem(row, 3, QTableWidgetItem(tenant.get('phone') or ''))
+
             created_at = tenant.get('created_at')
-            display_date = str(created_at)[:10] if created_at else ""
-            self.results_table.setItem(row, 4, QTableWidgetItem(display_date))
+            self.results_table.setItem(row, 4, QTableWidgetItem(
+                str(created_at)[:10] if created_at else ""
+            ))
 
 
 class RegisterTenantDialog(QDialog):

@@ -236,6 +236,17 @@ class MainApp(QMainWindow):
             self.stacked_widget.removeWidget(old)
             old.deleteLater()
 
+        # Rebuild FrontDeskPage with fresh data and current_user on every login.
+        # Without this, the page is built once at startup with current_user=None
+        # so current_city is always empty — showing all tenants and apartments
+        # across every city branch regardless of who logged in.
+        if role == "Front-Desk Staff":
+            old = self.frontdesk_page
+            self.frontdesk_page = FrontDeskPage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(3, self.frontdesk_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
         # Rebuild FinancePage with fresh data and current_user on every login
         if role == "Finance Manager":
             old = self.finance_page

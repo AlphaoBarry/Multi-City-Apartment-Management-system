@@ -1,79 +1,69 @@
 # PAMS — Property & Apartment Management System
 
-A **PyQt5 desktop application** for managing multi-city apartment portfolios with **role-based access control (RBAC)**. Five distinct user roles each have their own dashboard, sidebar navigation, and feature set.
+A **PyQt5 desktop application** for managing multi-city apartment portfolios with **persistent SQLite storage** and **city-scoped Role-Based Access Control (RBAC)**.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 pip install PyQt5
 
-# Run the application
+# 2. Initialise Database & Seed Data
+python -m database.seed
+
+# 3. Run the application
 python app.py
+
+# 4. Run Test Suite
+python -m pytest tests/
 ```
 
-### Mock Login Credentials
+### Role-Based Access (RBAC) & City Isolation
 
-| Username      | Password     | Role               |
-|---------------|--------------|---------------------|
-| `admin`       | `admin123`   | Administrator       |
-| `manager`     | `manager123` | Manager             |
-| `frontdesk`   | `front123`   | Front-Desk Staff    |
-| `finance`     | `finance123` | Finance Manager     |
-| `maintenance` | `maint123`   | Maintenance Staff   |
+PAMS enforces strict data isolation. Logged-in staff members (Front-Desk, Finance, Maintenance) only see data (Tenants, Apartments, Leases, Tickets) belonging to their specific **City Branch**.
+
+| Role | Default City | Username | Password |
+|---|---|---|---|
+| **Administrator** | Global | `admin` | `admin123` |
+| **Front-Desk** | Bristol | `front_bris` | `front123` |
+| **Front-Desk** | London | `front_lon` | `front123` |
+| **Maintenance** | Bristol | `maint_bris` | `maint123` |
+| **Finance** | Bristol | `fin_bris` | `fin123` |
 
 ---
 
 ## Architecture Overview
 
+PAMS utilizes a **N-Tier Architecture** centered around a singleton database service.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    MainApp (QMainWindow)                 │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │          QStackedWidget (page switching)           │  │
+│  │          QStackedWidget (Page Routing)             │  │
 │  │  ┌──────────┬──────────┬──────────┬─────┬──────┐  │  │
-│  │  │  Login   │  Admin   │ Manager  │ FD  │ Fin  │  │  │
-│  │  │ (idx 0)  │ (idx 1)  │ (idx 2)  │(3)  │(4)   │  │  │
+│  │  │  Login   │  Admin   │ Manager  │ FD  │ Mnt  │  │  │
+│  │  │ (idx 0)  │ (idx 1)  │ (idx 2)  │ (3) │ (4)  │  │  │
 │  │  └──────────┴──────────┴──────────┴─────┴──────┘  │  │
 │  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+│             ▲                        │
+└─────────────┼────────────────────────┼──────────────────┘
+              │                        │
+       Authenticate()           CRUD Operations
+              │                        │
+      ┌───────┴────────────────────────▼───────┐
+      │        database/db_service.py          │
+      │        (SQLite Persistence)            │
+      └────────────────────────────────────────┘
 ```
 
-### Login Flow
+### Key Architectural Patterns
 
-```
-User enters credentials
-        │
-        ▼
-LoginWindow.login()
-        │
-        ├── Looks up username in mock_data.USERS
-        │
-        ├── Password matches? ──► MainApp.switch_to_role(role)
-        │                                  │
-        │                         QStackedWidget.setCurrentIndex(
-        │                            ROLE_PAGE_INDEX[role]
-        │                         )
-        │
-        └── Password wrong? ────► Show inline error label
-```
-
-### Logout Flow
-
-```
-Sidebar "Logout" button clicked
-        │
-        ▼
-Sidebar.logout_signal (pyqtSignal) emitted
-        │
-        ▼
-Connected to MainApp.logout()
-        │
-        ├── LoginWindow.clear_fields()
-        └── QStackedWidget.setCurrentIndex(0)
-```
+1. **City Scoping**: All dashboard queries are decorated with a `city_name` or `city_branch` filter in `db_service.py`.
+2. **Dynamic Rebuild**: `MainApp` rebuilds role-specific pages on *every* login. This prevents cross-city data artifacts and ensures the UI correctly initializes with the current user's branch settings.
+3. **Shared Components**: UI dialogs (Tenant Registration, Search, Status Updates) are centralized in `components/shared_dialogs.py` to ensure visual and logic parity across roles.
 
 ---
 
@@ -81,159 +71,73 @@ Connected to MainApp.logout()
 
 ```
 ASD_PAMS/
-├── app.py                      # Entry point: LoginWindow + MainApp
-├── mock_data.py                # Centralised mock data (users, tenants, etc.)
-├── requirements.txt
-├── README.md
+├── app.py                      # Application Entry Point & Page Router
+├── database/
+│   ├── connection.py           # Thread-safe SQLite connection manager
+│   ├── db_service.py           # Core Business Logic & CRUD Operations
+│   └── seed.py                 # DB Initialisation & Mock Data Seeding
 ├── components/
-│   ├── __init__.py
-│   └── sidebar.py              # Reusable role-aware sidebar widget
-└── pages/
-    ├── __init__.py
-    ├── admin_page.py            # Administrator dashboard
-    ├── manager_page.py          # Manager dashboard
-    ├── frontdesk_page.py        # Front-Desk Staff dashboard
-    ├── finance_page.py          # Finance Manager dashboard
-    └── maintenance_page.py      # Maintenance Staff dashboard
+│   ├── sidebar.py              # Navigation Sidebar with Role-Aware Buttons
+│   └── shared_dialogs.py       # Reusable UI (Tenant Search, Registration)
+├── pages/
+│   ├── admin_page.py           # User Mgmt, Audit Logs, Apartment Mgmt
+│   ├── frontdesk_page.py       # Leasing Dashboard, Reservation System
+│   ├── maintenance_page.py     # Work Queue, Task Lifecycle, Cost Tracking
+│   └── finance_page.py         # Invoices, Payments, Financial Auditing
+└── tests/
+    ├── test_frontdesk.py       # Integrated testing for city-scoped leasing
+    ├── test_maintenance.py     # Lifecycle & Financial Summary verification
+    └── test_tenants.py         # Registration & Duplicate NI validation
 ```
-
----
-
-## Class Diagram & Relationships
-
-```
-                          QMainWindow
-                              │
-                          MainApp
-                      ┌───────┴────────┐
-                      │ stacked_widget │
-                      │ (QStackedWidget)│
-                      └────────────────┘
-                       /    |    |   |   \
-              LoginWindow  Admin Manager FrontDesk Finance Maintenance
-              (QWidget)    Page  Page    Page      Page    Page
-                            │     │       │         │       │
-                            └─────┴───────┴─────────┴───────┘
-                                        │
-                                   Each page has:
-                                   ├── Sidebar (QFrame)
-                                   │     ├── Logo area
-                                   │     ├── User info badge
-                                   │     ├── Nav buttons (role-specific)
-                                   │     └── Logout button
-                                   └── Content area (QScrollArea)
-                                         ├── Stat cards
-                                         ├── Data tables
-                                         └── Action buttons
-```
-
-### Key Classes
-
-| Class | File | Parent | Purpose |
-|-------|------|--------|---------|
-| `MainApp` | `app.py` | `QMainWindow` | Application shell, manages `QStackedWidget` page routing |
-| `LoginWindow` | `app.py` | `QWidget` | Authentication screen, credential lookup, role routing |
-| `Sidebar` | `components/sidebar.py` | `QFrame` | Role-aware navigation with `page_changed` and `logout_signal` signals |
-| `AdminPage` | `pages/admin_page.py` | `QWidget` | User management, audit log, system overview |
-| `ManagerPage` | `pages/manager_page.py` | `QWidget` | Occupancy reports, financial summaries, maintenance costs |
-| `FrontDeskPage` | `pages/frontdesk_page.py` | `QWidget` | Tenant registration, maintenance requests, quick actions |
-| `FinancePage` | `pages/finance_page.py` | `QWidget` | Payment processing, invoices, financial reports |
-| `MaintenancePage` | `pages/maintenance_page.py` | `QWidget` | Work queue, active/completed requests, cost tracking |
 
 ---
 
 ## Role ↔ Feature Mapping
 
-### Administrator (FR-1.x, FR-5.2, FR-5.3)
-- **User Management** — View, create, deactivate, reset passwords for employee accounts
-- **Audit Log** — View all data entries/modifications with User ID and timestamp
-- **Register Apartments** — Add new properties to the portfolio
-- **Manage Apartments** — Track apartment status across cities (Note: Old manual status override logic has been replaced with strict capacity-based occupancy validation rules).
-- **Lease Capacity Rules & Defense-in-Depth** — System natively blocks over-capacity assignments. It autonomously manages statuses and forces safe rollback of stranded Front-Desk reservation locks.
-- **Transient State Guarding** — Exclusively handles leases without queue timers. System-managed statuses like `reserved_pending` are mathematically fenced off from manual admin overrides.
-- **Tenant Search & Management** — Search for tenants dynamically across cities and register new profiles using shared role-agnostic dialogs.
-- **Data Backup** — Export database to CSV/SQL
+### 🛠 Administrator (System Master)
+- **Employee Management** — Create/Deactivate user accounts and city branch assignments.
+- **Apartment Lifecycle** — [SOFT] Deactivate apartments (blocked if an active lease exists).
+- **Audit Logs** — System-wide visibility of all CRUD actions with user-id/timestamp tracing.
+- **Global Search** — Access to all tenants and properties across all cities.
 
-### Manager (FR-5.1, FR-2.6)
-- **Occupancy Reports** — View occupancy rates across all cities
-- **Maintenance Cost Reports** — Track completed maintenance costs
-- **Financial Summaries** — Revenue, expenses, net income overview
-- **Add New City** — Scale portfolio with new locations
+### 🛎 Front-Desk Staff (Operational Scoped)
+- **Tenant Onboarding** — City-scoped registration with NI validation.
+- **Apartment Reservation (10-Min Timer)** — Prevents double-booking during walk-ins via a transient database lock.
+- **Active Lease Management** — Dedicated dashboard for city-wide leases, expiry tracking, and Digital Agreement previews.
+- **Early Leave Handling** — Automates termination penalties (5% monthly rent) and resets apartment status to 'Available'.
+- **Maintenance/Complaints** — Logs tickets on behalf of tenants with priority escalation.
 
-### Front-Desk Staff (FR-2.x)
-- **Register New Tenant** — Onboard with Name, NI Number, Phone, Email, Emergency Contact
-- **Apartment Assignment (10-Minute Lock)** — Employs a strict `reserved_pending` database queue to prevent assignment race conditions when multiple walk-in staff attempt to book the same room.
-- **Lease Management** — Track start/end dates
-- **Maintenance Requests** — Log issues on behalf of tenants
-- **Tenant Inquiries** — Look up tenant information
+### 🔧 Maintenance Staff (Service Scoped)
+- **Ticket Lifecycle** — Manage tasks from *Reported* → *In-Progress* → *Resolved*.
+- **Task Costing** — Log material costs and labor time for financial reporting.
+- **Complaint Visibility** — Exclusive tracking for [COMPLAINT] tickets to ensure SLA compliance.
+- **Branch Stats** — Worker availability and monthly spend summaries for their city.
 
-### Finance Manager (FR-3.x)
-- **Process Payments** — Record Cash, Transfer, Card payments
-- **Invoice Management** — Generate and track monthly rent invoices, enriched with linked property data (Apartment ID & Room Type)
-- **Late Payments** — Dashboard for tenants with overdue balances
-- **Financial Reports** — Generate revenue and expense reports
-- **Receipts** — Digital receipt generation for accurate transactional auditing
-
-### Maintenance Staff (FR-4.x)
-- **Active Requests** — View and manage open maintenance tasks
-- **Task Lifecycle** — Open → Assigned → In-Progress → Resolved
-- **Time & Materials** — Log hours spent and materials used
-- **Scheduling** — View and update task schedules
-- **Cost Tracking** — Monitor maintenance expenditures
+### 💰 Finance Manager (Accounting Scoped)
+- **Invoice Generation** — Automated rent billing with Room Type & Floor linkage.
+- **Late Payment tracking** — City-scoped filters for overdue balances.
+- **Financial Reporting** — Revenue vs. Expense summaries by branch.
 
 ---
 
-## Mock Data Structure (`mock_data.py`)
+## Technical Features
 
-| Collection | Contents | Used By |
-|-----------|----------|---------|
-| `USERS` | 5 user accounts with credentials/roles | `LoginWindow`, `AdminPage` |
-| `TENANTS` | 5 tenant records with full details | `FrontDeskPage` |
-| `APARTMENTS` | 8 apartments across 3 cities | `ManagerPage`, `AdminPage` |
-| `MAINTENANCE_REQUESTS` | 4 requests (open + completed) | `FrontDeskPage`, `MaintenancePage`, `ManagerPage` |
-| `INVOICES` | 4 invoices (Paid/Pending/Overdue) | `FinancePage` |
-| `EXPENSES` | 4 operational costs | `FinancePage` |
-| `AUDIT_LOG` | 7 logged actions | `AdminPage` |
-| `DASHBOARD_STATS` | Pre-computed card values per role | All dashboards |
+### 1. Database Safety & Concurrency
+- **Capacity-Based Validation**: `db_service` natively blocks lease assignments if an apartment is full (Capacity logic based on Room Type).
+- **Reserved States**: Transient apartment statuses (`reserved_pending`) are protected from manual Admin overrides to ensure Front-Desk workflow integrity.
 
----
+### 2. Digital Auditing
+- Every financial transaction and data modification is recorded in the `audit_logs` table, capturing `(user_id, action, table, record_id)`.
 
-## Seed Data (`database/seed_data.py`)
-Cities: 3 | Users: 6 | Apts: 6 | Tenants: 3 | Leases: 2 | Invoices: 2
-
-## Communication Between Classes
-
-### Signals Used
-
-| Signal | Emitter | Receiver | Purpose |
-|--------|---------|----------|---------|
-| `logout_signal` | `Sidebar` | `MainApp.logout()` | Return to login screen |
-| `page_changed(str)` | `Sidebar` | Each page's `_on_page_changed()` | Sub-page navigation (placeholder) |
-| `clicked` | `login_button` | `LoginWindow.login()` | Trigger authentication |
-| `returnPressed` | `password` field | `LoginWindow.login()` | Login on Enter key |
-
-
-
-### Page Index Map
-
-```python
-ROLE_PAGE_INDEX = {
-    "Administrator":     1,
-    "Manager":           2,
-    "Front-Desk Staff":  3,
-    "Finance Manager":   4,
-    "Maintenance Staff": 5,
-}
-```
+### 3. Integrated Test Suite
+PAMS includes a comprehensive test suite using `pytest`.
+- **Isolation Testing**: Verifies that a Bristol user cannot see London records.
+- **Business Logic Testing**: Validates penalty calculations and capacity checks.
 
 ---
 
-## Future Development
-
-Each dashboard page has `_on_page_changed(page_name)` stub methods ready for sub-page navigation. To add real functionality:
-
-1. **Replace mock data** — Connect to a SQLite/PostgreSQL database
-2. **Implement sub-pages** — Use a local `QStackedWidget` inside each page for multi-view navigation
-3. **Add form dialogs** — For tenant registration, payment recording, etc.
-4. **PDF report generation** — Using `reportlab` or `fpdf`
-5. **Password encryption** — Replace plaintext with `bcrypt` hashing
+## Contributors & Acknowledgements
+**Akande Bethel - 24039449**
+- Lead architecture, Front-Desk/Admin UI, and Database Integration.
+- Developed City-Scoped RBAC and Shared Dialog components.
+- Implemented the Reservation Timeout and Early Leave systems.

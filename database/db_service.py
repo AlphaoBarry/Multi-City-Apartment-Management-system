@@ -591,6 +591,27 @@ def log_maintenance_request(apt_id, description, priority="medium",
         )
     return tid
 
+
+def get_complaints() -> list[dict]:
+    """
+    Return all maintenance tickets whose description starts with [COMPLAINT].
+    Used by: FrontDeskPage complaint visibility, AdminPage, and test_frontdesk.py.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT m.*, a.room_type, a.floor_number, c.name as city_name,
+                      (u.first_name || ' ' || u.last_name) AS reporter_name,
+                      (u2.first_name || ' ' || u2.last_name) AS assignee_name
+               FROM maintenance_tickets m
+               JOIN apartments a ON m.apt_id = a.apt_id
+               JOIN cities c ON a.city_id = c.city_id
+               LEFT JOIN users u ON m.reported_by = u.user_id
+               LEFT JOIN users u2 ON m.assigned_to = u2.user_id
+               WHERE m.description LIKE '[COMPLAINT]%'
+               ORDER BY m.created_at DESC"""
+        ).fetchall()
+    return _rows_to_dicts(rows)
+
 def assign_ticket(ticket_id: str, assignee_id: str, operated_by: str = None) -> bool:
     """Assign a ticket to a worker and update its status."""
     with get_db() as conn:
@@ -996,25 +1017,6 @@ def process_early_leave(lease_id: str, operated_by: str = None) -> bool:
     if operated_by: write_audit_log(operated_by, "EARLY_LEAVE", "leases", lease_id)
     return True
 
-
-
-
-
-def register_tenant(first_name: str, last_name: str, ni_number: str, email: str, phone: str = None, 
-                    emergency_contact: str = None, occupation: str = None, created_by: str = None) -> str:
-    """Shared function for Admin and Front-Desk to register a new tenant."""
-    tenant_id = _new_id()
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO tenants (tenant_id, first_name, last_name, ni_number, email, phone, 
-                                    emergency_contact, occupation, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (tenant_id, first_name, last_name, ni_number, email, phone, emergency_contact, occupation, created_by)
-        )
-    if created_by: write_audit_log(created_by, "CREATE_TENANT", "tenants", tenant_id)
-    return tenant_id
-
-
 def backup_database(output_folder: str = "backups") -> str:
     """ADMIN ONLY: Generates a full SQL dump of the database using iterdump()."""
     if not os.path.exists(output_folder):
@@ -1417,17 +1419,5 @@ def release_apartment_reservation(reservation_id: str) -> bool:
         return False
 
 
-#COMPLAINTS FUNC BY TM
-
-def get_complaints() -> list[dict]:
-    """
-    Get all complaints (maintenance tickets marked with [COMPLAINT]).
-    
-    PURPOSE: Complaint Visibility feature
-    RETURNS: List of complaint tickets
-    """
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM maintenance_tickets WHERE description LIKE '%[COMPLAINT]%' ORDER BY created_at DESC"
-        ).fetchall()
-    return _rows_to_dicts(rows)
+# get_complaints is defined earlier in the MAINTENANCE section
+# (the version with the full JOIN for room_type, city_name, reporter_name, etc.)

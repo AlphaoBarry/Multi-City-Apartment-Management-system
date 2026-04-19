@@ -519,12 +519,12 @@ class MaintenancePage(QWidget):
 
         # modified by tomisin — stats now filtered to user's city branch
         branch = self.current_user.get("city_branch")
-        stats = get_dashboard_stats("Maintenance", city_branch=branch)
+        stats = get_dashboard_stats("Maintenance Staff", city_branch=branch)
         card_data = [
-            (str(stats.get("active_requests",     0)),    "Active Requests",      "↑ 5%",  "#e67e22"),
-            (str(stats.get("completed_this_month", 0)),   "Completed This Month", "↑ 12%", "#27ae60"),
-            (str(stats.get("avg_resolution_time", "0h")), "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
-            (str(stats.get("maintenance_costs",   "£0")), "Maintenance Costs",    "↑ 3%",  "#3498db"),
+            (str(stats.get("active_requests",      0)),    "Active Requests",      "↑ 5%",  "#e67e22"),
+            (str(stats.get("completed_this_month",  0)),   "Completed This Month", "↑ 12%", "#27ae60"),
+            (str(stats.get("avg_resolution_time",  "0h")), "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
+            (str(stats.get("maintenance_costs",    "£0")), "Maintenance Costs",    "↑ 3%",  "#3498db"),
         ]
         for i, (value, label, change, top_bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, top_bar)
