@@ -151,6 +151,7 @@ ASD_PAMS/
 - **Manage Apartments** — Track apartment status across cities (Note: Old manual status override logic has been replaced with strict capacity-based occupancy validation rules).
 - **Lease Capacity Rules & Defense-in-Depth** — System natively blocks over-capacity assignments. It autonomously manages statuses and forces safe rollback of stranded Front-Desk reservation locks.
 - **Transient State Guarding** — Exclusively handles leases without queue timers. System-managed statuses like `reserved_pending` are mathematically fenced off from manual admin overrides.
+- **Tenant Search & Management** — Search for tenants dynamically across cities and register new profiles using shared role-agnostic dialogs.
 - **Data Backup** — Export database to CSV/SQL
 
 ### Manager (FR-5.1, FR-2.6)
@@ -168,10 +169,10 @@ ASD_PAMS/
 
 ### Finance Manager (FR-3.x)
 - **Process Payments** — Record Cash, Transfer, Card payments
-- **Invoice Management** — Generate and track monthly rent invoices
+- **Invoice Management** — Generate and track monthly rent invoices, enriched with linked property data (Apartment ID & Room Type)
 - **Late Payments** — Dashboard for tenants with overdue balances
 - **Financial Reports** — Generate revenue and expense reports
-- **Receipts** — Digital receipt generation
+- **Receipts** — Digital receipt generation for accurate transactional auditing
 
 ### Maintenance Staff (FR-4.x)
 - **Active Requests** — View and manage open maintenance tasks

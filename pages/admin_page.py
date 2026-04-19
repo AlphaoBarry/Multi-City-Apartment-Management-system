@@ -18,7 +18,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from datetime import datetime
 from components.sidebar import Sidebar
-from components.shared_dialogs import RegisterTenantDialog, UpdateMaintenanceStatusDialog
+from components.shared_dialogs import RegisterTenantDialog, UpdateMaintenanceStatusDialog, TenantSearchDialog
 from database.db_service import (
     get_users, get_audit_log, get_dashboard_stats,
     create_user, deactivate_user, activate_user,
@@ -199,8 +199,11 @@ class RegisterApartmentDialog(QDialog):
 
     def get_data(self):
         try:
+            room = self.room_type.currentText().strip()
+            if not room:
+                return None
             return {
-                "room_type": self.room_type.currentText(),
+                "room_type": room,
                 "floor_number": int(self.floor.text()),
                 "monthly_rent": float(self.rent.text())
             }
@@ -735,6 +738,17 @@ class AdminPage(QWidget):
 
     def _build_view_tenant_info(self, layout):
         self._add_title(layout, "Tenant Information")
+        
+        search_btn = QPushButton("Search Tenants")
+        search_btn.setStyleSheet("background-color: #3498db; color: white; padding: 6px 12px; font-weight: bold; border-radius: 4px;")
+        search_btn.setCursor(Qt.PointingHandCursor)
+        search_btn.clicked.connect(self._open_tenant_search)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(search_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
         self.tenants_table = QTableWidget()
         self.tenants_table.setStyleSheet(self._table_style())
         self.tenants_table.verticalHeader().setVisible(False)
@@ -1006,6 +1020,10 @@ class AdminPage(QWidget):
                 self.refresh_all_data()
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
+
+    def _open_tenant_search(self):
+        dlg = TenantSearchDialog(parent=self)
+        dlg.exec_()
 
     def _on_update_ticket_status(self, ticket_id: str, current_status: str):
         dlg = UpdateMaintenanceStatusDialog(current_status, parent=self)

@@ -8,7 +8,69 @@ Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QLineEdit,
-                              QDialogButtonBox, QComboBox)
+                              QDialogButtonBox, QComboBox, QHBoxLayout, QLabel, 
+                              QPushButton, QTableWidget, QTableWidgetItem, QHeaderView)
+from database.db_service import get_tenants
+
+class TenantSearchDialog(QDialog):
+    """Search for registered tenants"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Search Tenants")
+        self.setGeometry(100, 100, 700, 400)
+
+        layout = QVBoxLayout(self)
+
+        # ── Search Bar ────────────────────────────────────────────────────
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("Search:"))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Name, NI, Email, or Phone...")
+        self.search_input.textChanged.connect(self._refresh_results)
+        search_layout.addWidget(self.search_input)
+        layout.addLayout(search_layout)
+
+        # ── Results Table ─────────────────────────────────────────────────
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(5)
+        self.results_table.setHorizontalHeaderLabels(["Name", "NI Number", "Email", "Phone", "Registered"])
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.results_table)
+
+        # ── Close Button ──────────────────────────────────────────────────
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+        self._refresh_results()
+
+    def _refresh_results(self):
+        """Refresh search results"""
+        query = self.search_input.text().lower()
+        self.results_table.setRowCount(0)
+
+        tenants = get_tenants()
+        results = [t for t in tenants if
+            query in f"{t.get('first_name', '')} {t.get('last_name', '')}".lower() or
+            query in t.get('ni_number', '').lower() or
+            query in t.get('email', '').lower() or
+            query in t.get('phone', '').lower()
+        ]
+
+        for row, tenant in enumerate(results):
+            self.results_table.insertRow(row)
+            self.results_table.setItem(row, 0, QTableWidgetItem(
+                f"{tenant.get('first_name', '')} {tenant.get('last_name', '')}"
+            ))
+            self.results_table.setItem(row, 1, QTableWidgetItem(tenant.get('ni_number', '')))
+            self.results_table.setItem(row, 2, QTableWidgetItem(tenant.get('email', '')))
+            self.results_table.setItem(row, 3, QTableWidgetItem(tenant.get('phone', '')))
+            
+            created_at = tenant.get('created_at')
+            display_date = str(created_at)[:10] if created_at else ""
+            self.results_table.setItem(row, 4, QTableWidgetItem(display_date))
+
 
 class RegisterTenantDialog(QDialog):
     """

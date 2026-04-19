@@ -7,9 +7,9 @@ This document outlines the core functional updates made to the Administrator Rol
 To satisfy the **Inheritance Rule** (where Administrators inherit operational capabilities from Front-Desk Staff) while maintaining distinct UI architectures, we implemented shared dialog sub-components.
 
 ### `components/shared_dialogs.py`
-Instead of duplicating the "Register Tenant" logic on the `AdminPage` and the `FrontDeskPage`, both dashboards simply import the central `RegisterTenantDialog` form. 
-- **How it works:** When the Admin clicks "Register Tenant", it instantiates the exact same Python UI class used by the Front Desk.
-- **Database Hook:** Both views post form data to `register_tenant(...)` residing securely inside `db_service.py`.
+Instead of duplicating the "Register Tenant" and "Tenant Search" logics on the `AdminPage` and the `FrontDeskPage`, both dashboards simply import the centralized `RegisterTenantDialog` and `TenantSearchDialog` forms. 
+- **How it works:** When the Admin clicks "Register Tenant" or "Search Tenants", it instantiates the exact same Python UI class used by the Front Desk.
+- **Database Hook:** Both views reliably communicate with global service hooks (e.g. `register_tenant(...)` and `get_tenants(...)`) residing securely inside `db_service.py`.
 
 ### Maintenance Ticket Resolution
 Using the same principle, `UpdateMaintenanceStatusDialog` is a shared component explicitly built for use by both the **Administrator** (for quality control closure) and the **Maintenance Staff** (for advancing status to 'Resolved'). 
