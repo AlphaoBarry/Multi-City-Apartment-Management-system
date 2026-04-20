@@ -4,6 +4,8 @@ Database Connection Module
 
 Handles SQLite connection setup, configuration, and lifecycle management.
 Uses a singleton pattern so the entire app shares one connection pool.
+
+Ninioritse Great - 23055382
 """
 
 import sqlite3

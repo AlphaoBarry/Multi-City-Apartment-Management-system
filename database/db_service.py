@@ -4,6 +4,8 @@ Database Service Layer
 
 All database queries live here. Pages and controllers import from this module
 instead of touching the database directly.
+
+Ninioritse Great - 23055382
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@ PAMS - Paragon Apartment Management System
 Database Seeder — Mock Data for Testing & Demonstration
 
 Run this once after init_db() to populate the database with realistic test data.
-Golden
+Ninioritse Great - 23055382
 """
 
 import hashlib

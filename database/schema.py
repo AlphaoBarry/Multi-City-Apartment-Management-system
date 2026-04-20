@@ -4,6 +4,8 @@ Database Schema (SQLite DDL)
 
 All CREATE TABLE statements live here, derived from the Group 6 class diagram.
 Tables are ordered to respect foreign key constraints.
+
+Ninioritse Great - 23055382
 """
 
 CREATE_TABLES_SQL = [

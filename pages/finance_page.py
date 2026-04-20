@@ -1,6 +1,8 @@
 """
 finance_page.py — Dashboard for Finance Manager.
 Covers FR-3.x: Invoicing, Payment Tracking, Arrears Alerts, Expense Management, Receipts.
+
+Ninioritse Great - 23055382
 """
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,

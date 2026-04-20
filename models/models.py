@@ -4,6 +4,8 @@ Models (Python dataclasses — mapped to SQLite tables)
 
 Each class here maps 1:1 to a database table.
 These are used throughout the app as typed data containers.
+
+Ninioritse Great - 23055382
 """
 
 from dataclasses import dataclass, field

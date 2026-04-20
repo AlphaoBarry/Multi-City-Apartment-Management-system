@@ -1,6 +1,8 @@
 """
 sidebar.py — Reusable sidebar navigation component.
 Adapts its menu items based on the logged-in user's role.
+
+Akande Bethel - 24039449
 """
 
 from PyQt5.QtWidgets import (QFrame, QVBoxLayout, QLabel, QPushButton,
