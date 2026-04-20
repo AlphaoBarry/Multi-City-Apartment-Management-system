@@ -57,11 +57,57 @@ class ManagerPage(QWidget):
         page = self._make_scroll_page()
         lay = page.widget().layout()
 
+        title_row = QHBoxLayout()
         title = QLabel("Manager Overview")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
-        lay.addWidget(title)
+        title_row.addWidget(title)
         
-        # added by alpha
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_dashboard_data)
+        title_row.addStretch()
+        title_row.addWidget(refresh_btn)
+        
+        lay.addLayout(title_row)
+        
+        # Stat Cards Grid
+        self.dash_grid = QGridLayout()
+        self.dash_grid.setSpacing(12)
+        lay.addLayout(self.dash_grid)
+        
+        # 1. City Breakdown
+        city_frame = QFrame()
+        city_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
+        self.city_list_lay = QVBoxLayout(city_frame)
+        self.city_list_lay.setContentsMargins(15, 15, 15, 15)
+        
+        # 2. Overdue Invoices
+        overdue_frame = QFrame()
+        overdue_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
+        self.overdue_list_lay = QVBoxLayout(overdue_frame)
+        self.overdue_list_lay.setContentsMargins(15, 15, 15, 15)
+        
+        # 3. Recent Maintenance
+        ticket_frame = QFrame()
+        ticket_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
+        self.ticket_list_lay = QVBoxLayout(ticket_frame)
+        self.ticket_list_lay.setContentsMargins(15, 15, 15, 15)
+
+        # Create a horizontal layout for bottom section
+        bottom_hlay = QHBoxLayout()
+        bottom_hlay.setSpacing(16)
+        bottom_hlay.addWidget(city_frame)
+        bottom_hlay.addWidget(overdue_frame)
+        bottom_hlay.addWidget(ticket_frame)
+        lay.addLayout(bottom_hlay)
+        
+        self._refresh_dashboard_data()
+        
+        self._pages["Dashboard"] = page
+        self.content_stack.addWidget(page)
+
+    def _refresh_dashboard_data(self):
+        # 1. Fetch Fresh Data
         fin = get_manager_financial_report()
         occ = get_manager_occupancy_report()
         main_costs = get_maintenance_cost_report()
@@ -70,94 +116,79 @@ class ManagerPage(QWidget):
         total_occ = sum(c['occupied'] for c in occ)
         occ_rate = f"{int(total_occ / total_apts * 100)}%" if total_apts else "0%"
 
+        # 2. Update Stat Cards
+        # Clear existing grid widgets
+        while self.dash_grid.count():
+            item = self.dash_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
         card_data = [
             (f"£{fin['collected']:,.0f}",    "Total Revenue",     "", "#27ae60"),
             (occ_rate,    "Occupancy Rate",    "",  "#3498db"),
             (str(len(main_costs)),  "Resolved Maintenance",  "",   "#e67e22"),
             (str(total_apts),  "Total Properties",  "",      "#6c5ce7"),
         ]
-        grid = QGridLayout()
-        grid.setSpacing(12)
         for i, (value, label, change, bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, bar)
-            grid.addWidget(card, 0, i)
-        lay.addLayout(grid)
+            self.dash_grid.addWidget(card, 0, i)
+
+        # 3. Update City Breakdown
+        while self.city_list_lay.count():
+            item = self.city_list_lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
         
-        # add gap
-        lay.addSpacing(20)
-
-        # Create a horizontal layout for bottom section
-        bottom_hlay = QHBoxLayout()
-        bottom_hlay.setSpacing(16)
-
-        # 1. City Breakdown
-        city_frame = QFrame()
-        city_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
-        c_lay = QVBoxLayout(city_frame)
-        c_lay.setContentsMargins(15, 15, 15, 15)
         c_title = QLabel("City Occupancy")
         c_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2d3748;")
-        c_lay.addWidget(c_title)
-        
+        self.city_list_lay.addWidget(c_title)
         for c in occ:
             rate = f"{int(c['occupied']/c['total_apartments']*100)}%" if c['total_apartments'] > 0 else "0%"
             lbl = QLabel(f"{c['city']}: {rate} ({c['occupied']}/{c['total_apartments']})")
             lbl.setStyleSheet("font-size: 13px; color: #4a5568; margin-top: 5px;")
-            c_lay.addWidget(lbl)
-        c_lay.addStretch()
-        bottom_hlay.addWidget(city_frame)
+            self.city_list_lay.addWidget(lbl)
+        self.city_list_lay.addStretch()
 
-        # 2. Overdue Invoices
-        overdue_frame = QFrame()
-        overdue_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
-        o_lay = QVBoxLayout(overdue_frame)
-        o_lay.setContentsMargins(15, 15, 15, 15)
+        # 4. Update Overdue Invoices
+        while self.overdue_list_lay.count():
+            item = self.overdue_list_lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        
         o_title = QLabel("Overdue Rent")
         o_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #e53e3e;")
-        o_lay.addWidget(o_title)
-        
+        self.overdue_list_lay.addWidget(o_title)
         overdue_list = get_overdue_invoices()
         if not overdue_list:
             lbl = QLabel("No overdue rent! 🎉")
             lbl.setStyleSheet("font-size: 13px; color: #4a5568;")
-            o_lay.addWidget(lbl)
+            self.overdue_list_lay.addWidget(lbl)
         else:
-            for inv in overdue_list[:5]: # top 5
+            for inv in overdue_list[:5]:
                 lbl = QLabel(f"• {inv['tenant_name']} - £{inv['amount_due']:,.2f}")
                 lbl.setStyleSheet("font-size: 13px; color: #4a5568; margin-top: 5px;")
-                o_lay.addWidget(lbl)
-        o_lay.addStretch()
-        bottom_hlay.addWidget(overdue_frame)
+                self.overdue_list_lay.addWidget(lbl)
+        self.overdue_list_lay.addStretch()
 
-        # 3. Recent Maintenance
-        ticket_frame = QFrame()
-        ticket_frame.setStyleSheet("QFrame { background-color: white; border-radius: 10px; }")
-        t_lay = QVBoxLayout(ticket_frame)
-        t_lay.setContentsMargins(15, 15, 15, 15)
+        # 5. Update Recent Tickets
+        while self.ticket_list_lay.count():
+            item = self.ticket_list_lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            
         t_title = QLabel("Recent Open Tickets")
         t_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #e67e22;")
-        t_lay.addWidget(t_title)
-
+        self.ticket_list_lay.addWidget(t_title)
         tickets = get_maintenance_tickets("open")
         if not tickets:
              lbl = QLabel("No open tickets! ✅")
              lbl.setStyleSheet("font-size: 13px; color: #4a5568;")
-             t_lay.addWidget(lbl)
+             self.ticket_list_lay.addWidget(lbl)
         else:
              for ticket in tickets[:5]:
                  p_emoji = "🔴" if ticket['priority'] == "high" else ("🟠" if ticket['priority'] == "medium" else "🟢")
                  desc = (ticket['description'][:25] + '..') if len(ticket['description']) > 25 else ticket['description']
                  lbl = QLabel(f"{p_emoji} {desc}")
                  lbl.setStyleSheet("font-size: 13px; color: #4a5568; margin-top: 5px;")
-                 t_lay.addWidget(lbl)
-        t_lay.addStretch()
-        bottom_hlay.addWidget(ticket_frame)
-
-        lay.addLayout(bottom_hlay)
-        lay.addStretch()
-
-        self._pages["Dashboard"] = page
-        self.content_stack.addWidget(page)
+                 self.ticket_list_lay.addWidget(lbl)
+        self.ticket_list_lay.addStretch()
 
     # ══════════════════════════════════════════════════════════════════════
     # OCCUPANCY REPORT PAGE - added by alpha
@@ -785,6 +816,8 @@ class ManagerPage(QWidget):
     def _on_page_changed(self, page_name: str):
         if page_name in self._pages:
             self.content_stack.setCurrentWidget(self._pages[page_name])
+            if page_name == "Dashboard":
+                self._refresh_dashboard_data()
 
     def _logout(self):
         if self.main_app:

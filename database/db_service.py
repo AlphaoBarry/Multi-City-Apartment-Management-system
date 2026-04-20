@@ -631,21 +631,35 @@ def get_dashboard_stats(role: str, city_branch: str = None) -> dict:
 
         # added by tomisin
         if role == "Maintenance Staff":
+            where_clause = ""
+            join_clause = ""
+            params = []
+            if city_branch:
+                join_clause = " JOIN apartments a ON m.apt_id = a.apt_id JOIN cities c ON a.city_id = c.city_id "
+                where_clause = " AND c.name = ?"
+                params = [city_branch]
+
             active_requests = conn.execute(
-                "SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('resolved', 'closed')"
+                f"SELECT COUNT(*) FROM maintenance_tickets m {join_clause} WHERE m.status NOT IN ('resolved', 'closed') {where_clause}",
+                params
             ).fetchone()[0]
+            
             completed = conn.execute(
-                "SELECT COUNT(*) FROM maintenance_tickets WHERE status IN ('resolved', 'closed') AND date(resolved_at) >= date('now', 'start of month')"
+                f"SELECT COUNT(*) FROM maintenance_tickets m {join_clause} WHERE m.status IN ('resolved', 'closed') AND date(m.resolved_at) >= date('now', 'start of month') {where_clause}",
+                params
             ).fetchone()[0]
+            
             costs = conn.execute(
-                "SELECT COALESCE(SUM(materials_cost), 0) FROM maintenance_tickets WHERE status IN ('resolved', 'closed')"
+                f"SELECT COALESCE(SUM(m.materials_cost), 0) FROM maintenance_tickets m {join_clause} WHERE m.status IN ('resolved', 'closed') {where_clause}",
+                params
             ).fetchone()[0]
             
             # Calculate live avg resolution time (in hours)
             avg_res = conn.execute(
-                """SELECT AVG((julianday(resolved_at) - julianday(created_at)) * 24) 
-                   FROM maintenance_tickets 
-                   WHERE status IN ('resolved', 'closed') AND resolved_at IS NOT NULL"""
+                f"""SELECT AVG((julianday(m.resolved_at) - julianday(m.created_at)) * 24) 
+                   FROM maintenance_tickets m {join_clause}
+                   WHERE m.status IN ('resolved', 'closed') AND m.resolved_at IS NOT NULL {where_clause}""",
+                params
             ).fetchone()[0]
             
             return {

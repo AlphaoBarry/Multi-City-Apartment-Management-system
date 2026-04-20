@@ -481,7 +481,15 @@ class MaintenancePage(QWidget):
         # modified by tomisin — shows city-specific title e.g. 'Bristol Maintenance Dashboard'
         title = QLabel(f"{self.branch_city} Maintenance Dashboard")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        
+        refresh_btn = QPushButton("🔄 Refresh Dashboard")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self.refresh_all)
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+
         header_layout.addWidget(title)
+        header_layout.addStretch()
+        header_layout.addWidget(refresh_btn)
 
         self.content_layout.addLayout(header_layout)
 
@@ -521,10 +529,10 @@ class MaintenancePage(QWidget):
         branch = self.current_user.get("city_branch")
         stats = get_dashboard_stats("Maintenance Staff", city_branch=branch)
         card_data = [
-            (str(stats.get("active_requests",      0)),    "Active Requests",      "↑ 5%",  "#e67e22"),
-            (str(stats.get("completed_this_month",  0)),   "Completed This Month", "↑ 12%", "#27ae60"),
-            (str(stats.get("avg_resolution_time",  "0h")), "Avg. Resolution Time", "↑ 8%",  "#e74c3c"),
-            (str(stats.get("maintenance_costs",    "£0")), "Maintenance Costs",    "↑ 3%",  "#3498db"),
+            (str(stats.get("active_requests",      0)),    "Active Requests",      "",  "#e67e22"),
+            (str(stats.get("completed_this_month",  0)),   "Completed This Month", "",  "#27ae60"),
+            (str(stats.get("avg_resolution_time",  "0h")), "Avg. Resolution Time", "",  "#e74c3c"),
+            (str(stats.get("maintenance_costs",    "£0")), "Maintenance Costs",    "",  "#3498db"),
         ]
         for i, (value, label, change, top_bar) in enumerate(card_data):
             card = self._stat_card(value, label, change, top_bar)
@@ -738,6 +746,15 @@ class MaintenancePage(QWidget):
     def _logout(self):
         if self.main_app:
             self.main_app.logout()
+
+    def _refresh_btn_style(self):
+        return """
+            QPushButton {
+                background-color: #00b894; color: white; border-radius: 18px;
+                padding: 8px 18px; font-weight: bold; font-size: 12px; border: none;
+            }
+            QPushButton:hover { background-color: #00a381; }
+        """
 
     def load_tickets(self):
         """Reload tickets and update tables."""

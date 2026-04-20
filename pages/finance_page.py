@@ -100,10 +100,11 @@ class FinancePage(QWidget):
         page = self._make_scroll_page()
         lay = page.widget().layout()
 
-        # Header row with title + Generate Monthly Invoices shortcut
+        # Header row with title + Generate Monthly Invoices shortcut + Refresh
         hdr = QHBoxLayout()
         title = QLabel("Financial Dashboard")
         title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1a202c;")
+        
         gen_btn = QPushButton("⚡ Generate Monthly Invoices")
         gen_btn.setStyleSheet(
             "QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
@@ -112,24 +113,22 @@ class FinancePage(QWidget):
             "QPushButton:hover { opacity: 0.9; }"
         )
         gen_btn.clicked.connect(self._on_generate_monthly_invoices)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_dashboard_data)
+
         hdr.addWidget(title)
         hdr.addStretch()
+        hdr.addWidget(refresh_btn)
+        hdr.addSpacing(10)
         hdr.addWidget(gen_btn)
         lay.addLayout(hdr)
 
-        # Stat cards
-        stats = get_dashboard_stats("Finance Manager", city_branch=self.city_branch)
-        card_data = [
-            (str(stats.get("Rent Collected", "£0")),   "Rent Collected",   "↑ 15%", "#e67e22"),
-            (str(stats.get("Pending Invoices", 0)),     "Pending Invoices", "↑ 8%",  "#e74c3c"),
-            (str(stats.get("Overdue Invoices", 0)),     "Overdue Invoices", "↑ 3%",  "#27ae60"),
-            (str(stats.get("Expenses", "£0")),          "Expenses",         "↑ 12%", "#3498db"),
-        ]
-        grid = QGridLayout()
-        grid.setSpacing(12)
-        for i, (value, label, change, color) in enumerate(card_data):
-            grid.addWidget(self._stat_card(value, label, change, color), 0, i)
-        lay.addLayout(grid)
+        # Stat cards grid container
+        self.dash_stats_grid = QGridLayout()
+        self.dash_stats_grid.setSpacing(12)
+        lay.addLayout(self.dash_stats_grid)
 
         # Payment processing header + button
         header_row = QHBoxLayout()
@@ -151,14 +150,35 @@ class FinancePage(QWidget):
         self.dashboard_table = QTableWidget()
         self.dashboard_table.setStyleSheet(self._table_style())
         lay.addWidget(self.dashboard_table)
-        self._refresh_invoice_table(self.dashboard_table, get_invoices(city_branch=self.city_branch))
 
         # Financial reports placeholder
         self._add_report_placeholder(lay)
 
+        self._refresh_dashboard_data()
+
         lay.addStretch()
         self._pages["Dashboard"] = page
         self.content_stack.addWidget(page)
+
+    def _refresh_dashboard_data(self):
+        """Update dashboard stats and table with fresh data."""
+        stats = get_dashboard_stats("Finance Manager", city_branch=self.city_branch)
+        
+        # Clear existing grid
+        while self.dash_stats_grid.count():
+            item = self.dash_stats_grid.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            
+        card_data = [
+            (str(stats.get("Rent Collected", "£0")),   "Rent Collected",   "↑ 15%", "#e67e22"),
+            (str(stats.get("Pending Invoices", 0)),     "Pending Invoices", "↑ 8%",  "#e74c3c"),
+            (str(stats.get("Overdue Invoices", 0)),     "Overdue Invoices", "↑ 3%",  "#27ae60"),
+            (str(stats.get("Expenses", "£0")),          "Expenses",         "↑ 12%", "#3498db"),
+        ]
+        for i, (value, label, change, color) in enumerate(card_data):
+            self.dash_stats_grid.addWidget(self._stat_card(value, label, change, color), 0, i)
+            
+        self._refresh_invoice_table(self.dashboard_table, get_invoices(city_branch=self.city_branch))
 
     # ══════════════════════════════════════════════════════════════════════
     # MONTHLY INVOICES PAGE  (FR-3.1)
@@ -484,9 +504,16 @@ class FinancePage(QWidget):
         lay.addWidget(form_frame)
 
         # Expense table
+        row = QHBoxLayout()
         lbl = QLabel("Recorded Expenses")
         lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a202c;")
-        lay.addWidget(lbl)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_expense_table)
+        row.addWidget(lbl)
+        row.addStretch()
+        row.addWidget(refresh_btn)
+        lay.addLayout(row)
 
         self.expense_table = QTableWidget()
         self.expense_table.setStyleSheet(self._table_style())
@@ -593,9 +620,16 @@ class FinancePage(QWidget):
         lay.addWidget(form)
 
         # Unpaid-invoices table
+        row = QHBoxLayout()
         lbl = QLabel("Unpaid Invoices (scoped to your branch)")
         lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #1a202c;")
-        lay.addWidget(lbl)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(self._refresh_process_payments)
+        row.addWidget(lbl)
+        row.addStretch()
+        row.addWidget(refresh_btn)
+        lay.addLayout(row)
         self.pp_table = QTableWidget()
         self.pp_table.setStyleSheet(self._table_style())
         lay.addWidget(self.pp_table)
@@ -744,9 +778,15 @@ class FinancePage(QWidget):
         self.rev_year.addItems([str(y) for y in range(current_year, current_year - 5, -1)])
         self.rev_year.setStyleSheet(self._combo_style())
         self.rev_year.currentTextChanged.connect(self._refresh_revenue_table)
+        
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet(self._refresh_btn_style())
+        refresh_btn.clicked.connect(lambda: self._refresh_revenue_table(self.rev_year.currentText()))
+        
         row.addWidget(QLabel("Year:"))
         row.addWidget(self.rev_year)
         row.addStretch()
+        row.addWidget(refresh_btn)
         lay.addLayout(row)
 
         self.rev_table = QTableWidget()
@@ -1065,6 +1105,24 @@ class FinancePage(QWidget):
     def _on_page_changed(self, page_name: str):
         if page_name in self._pages:
             self.content_stack.setCurrentWidget(self._pages[page_name])
+            
+            # Auto-refresh logic
+            if page_name == "Dashboard":
+                self._refresh_dashboard_data()
+            elif page_name == "Monthly Invoices":
+                self._refresh_monthly_invoices_table()
+            elif page_name == "Invoices":
+                self._on_invoice_filter_changed(self.invoice_filter.currentText())
+            elif page_name == "Late Payments":
+                self._refresh_late_payments()
+            elif page_name == "Payment History":
+                self._refresh_payment_history()
+            elif page_name == "Expense Tracking":
+                self._refresh_expense_table()
+            elif page_name == "Process Payments":
+                self._refresh_process_payments()
+            elif page_name == "Revenue Analysis":
+                self._refresh_revenue_table(self.rev_year.currentText())
 
     def _logout(self):
         if self.main_app:
