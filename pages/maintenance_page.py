@@ -320,6 +320,52 @@ class UpdateStockDialog(QDialog):
         except ValueError:
             return 0, self.condition_input.currentText()
 
+class AddEquipmentDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Equipment")
+        self.setFixedSize(300, 250)
+        self.setStyleSheet("background-color: #f8fafc;")
+        
+        layout = QFormLayout(self)
+        
+        self.name_input = QLineEdit()
+        self.name_input.setStyleSheet("padding: 6px; border: 1px solid #cbd5e0; border-radius: 4px; background: white;")
+        self.category_input = QComboBox()
+        self.category_input.addItems(["Tools", "Supplies", "Parts"])
+        self.category_input.setStyleSheet("padding: 6px; border: 1px solid #cbd5e0; border-radius: 4px; background: white;")
+        
+        self.qty_input = QLineEdit()
+        self.qty_input.setStyleSheet("padding: 6px; border: 1px solid #cbd5e0; border-radius: 4px; background: white;")
+        self.condition_input = QComboBox()
+        self.condition_input.addItems(["Good", "Fair", "Poor", "Broken"])
+        self.condition_input.setStyleSheet("padding: 6px; border: 1px solid #cbd5e0; border-radius: 4px; background: white;")
+        
+        layout.addRow("Item Name:", self.name_input)
+        layout.addRow("Category:", self.category_input)
+        layout.addRow("Quantity:", self.qty_input)
+        layout.addRow("Condition:", self.condition_input)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def get_data(self):
+        if not self.name_input.text().strip():
+            return None
+        try:
+            qty = int(self.qty_input.text() or 0)
+        except ValueError:
+            qty = 0
+            
+        return {
+            'name': self.name_input.text().strip(),
+            'category': self.category_input.currentText(),
+            'quantity': qty,
+            'status': self.condition_input.currentText()
+        }
+
 
 # added by tomisin
 class EquipmentView(QWidget):
@@ -343,6 +389,12 @@ class EquipmentView(QWidget):
         self.filter_box.setFixedWidth(120)
         header_lay.addWidget(QLabel("Filter:"))
         header_lay.addWidget(self.filter_box)
+        
+        self.add_btn = QPushButton("+ Add")
+        self.add_btn.setStyleSheet("padding: 6px 16px; background: #3498db; color: white; border-radius: 6px; font-weight: bold; border: none;")
+        self.add_btn.clicked.connect(self._open_add_dialog)
+        self.add_btn.setCursor(Qt.PointingHandCursor)
+        header_lay.addWidget(self.add_btn)
         
         layout.addLayout(header_lay)
 
@@ -393,6 +445,14 @@ class EquipmentView(QWidget):
         if dlg.exec_():
             new_qty, new_status = dlg.get_data()
             if update_equipment_stock(item['item_id'], new_qty, new_status):
+                self.load_data()
+
+    def _open_add_dialog(self):
+        dlg = AddEquipmentDialog(self)
+        if dlg.exec_():
+            data = dlg.get_data()
+            if data:
+                add_equipment(data['name'], data['category'], data['quantity'], data['status'])
                 self.load_data()
 
     def _table_style(self):

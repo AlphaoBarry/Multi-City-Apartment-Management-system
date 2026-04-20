@@ -152,9 +152,26 @@ def seed():
             ]
         )
 
+        # 7. Equipment
+        equipment = [
+            (nid(), "Power Drill", "Tools", 15, "Good"),
+            (nid(), "Pipe Wrench Set", "Tools", 8, "Good"),
+            (nid(), "Safety Goggles", "Supplies", 25, "Good"),
+            (nid(), "Duct Tape (Rolls)", "Supplies", 40, "Good"),
+            (nid(), "Spare Faucet Valves", "Parts", 12, "Fair"),
+            (nid(), "LED Bulbs", "Parts", 100, "Good"),
+            (nid(), "Ladder", "Tools", 3, "Poor")
+        ]
+        conn.executemany(
+            """INSERT OR IGNORE INTO equipment
+               (item_id, name, category, quantity, status)
+               VALUES (?,?,?,?,?)""",
+            equipment
+        )
+
         print("[OK] PAMS database seeded successfully.")
         print(f"   Cities: {len(cities)} | Users: {len(users)} | Apts: {len(apt_ids)}")
-        print(f"   Tenants: {len(tenant_ids)} | Leases: {len(lease_ids)} | Invoices: {len(invoices)}")
+        print(f"   Tenants: {len(tenant_ids)} | Leases: {len(lease_ids)} | Invoices: {len(invoices)} | Equipment: {len(equipment)}")
 
 
 if __name__ == "__main__":
