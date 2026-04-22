@@ -1,4 +1,4 @@
-#### Alpha code ####
+#### Alpha Barry - 24034429 ####
 
 """
 manager_page.py — Dashboard for the Manager role.
@@ -191,7 +191,7 @@ class ManagerPage(QWidget):
         self.ticket_list_lay.addStretch()
 
     # ══════════════════════════════════════════════════════════════════════
-    # OCCUPANCY REPORT PAGE - added by alpha
+    # OCCUPANCY REPORT PAGE 
     # ══════════════════════════════════════════════════════════════════════
     def _build_occupancy_report_page(self):
         page = self._make_scroll_page()
@@ -291,7 +291,7 @@ class ManagerPage(QWidget):
             self.detailed_occ_table.setItem(r, 7, QTableWidgetItem(rep['occupants'] or "None"))
 
     # ══════════════════════════════════════════════════════════════════════
-    # MAINTENANCE COST REPORT PAGE - added by alpha
+    # MAINTENANCE COST REPORT PAGE 
     # ══════════════════════════════════════════════════════════════════════
     def _build_maintenance_cost_page(self):
         page = self._make_scroll_page()
@@ -344,7 +344,7 @@ class ManagerPage(QWidget):
             self.maint_table.setItem(r, 4, QTableWidgetItem(f"£{row['materials_cost']:,.2f}"))
 
     # ══════════════════════════════════════════════════════════════════════
-    # FINANCIAL SUMMARY PAGE - added by alpha
+    # FINANCIAL SUMMARY PAGE 
     # ══════════════════════════════════════════════════════════════════════
     def _build_financial_summary_page(self):
         page = self._make_scroll_page()

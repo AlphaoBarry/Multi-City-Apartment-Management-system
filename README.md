@@ -26,13 +26,17 @@ PAMS enforces strict data isolation. Logged-in staff members (Front-Desk, Financ
 
 | Role | Default City | Username | Password |
 |---|---|---|---|
-| **Administrator** | Global | `admin` | `admin123` |
-| **Front-Desk** | Bristol | `front_bris` | `front123` |
-| **Front-Desk** | London | `front_lon` | `front123` |
-| **Maintenance** | Bristol | `maint_bris` | `maint123` |
-| **Finance** | Bristol | `fin_bris` | `fin123` |
+| **Administrator** | Bristol | `admin_bristol` | `Admin@123` |
+| **Front-Desk** | Bristol | `frontdesk_bris` | `Front@123` |
+| **Front-Desk** | London | `frontdesk_london` | `Front@456` |
+| **Maintenance** | Bristol | `maint_bris` | `Maint@123` |
+| **Finance** | Bristol | `finance_bris` | `Finance@123` |
+| **Manager** | Global | `manager_global` | `Manager@123` |
+
+Note: TO SEE ALL THE USERs and their CREDENTIALS GO TO SEED.PY FILE LINE 51-64.
 
 ---
+
 
 ## Architecture Overview
 
@@ -147,3 +151,9 @@ PAMS includes a comprehensive test suite using `pytest`.
 - Lead architecture, Front-Desk/Admin UI, and Database Integration.
 - Developed City-Scoped RBAC and Shared Dialog components.
 - Implemented the Reservation Timeout and Early Leave systems.
+
+
+**Alpha Barry - 24034429**
+- Lead architecture, Manager Page, and Database Integration.
+- Report Generation and report writting for element 1, 2 and 3.
+- Made the designs(Class Diagram, 3 Sequence Diagrams)

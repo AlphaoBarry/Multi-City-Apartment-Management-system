@@ -6,6 +6,7 @@ All database queries live here. Pages and controllers import from this module
 instead of touching the database directly.
 
 Ninioritse Great - 23055382
+Alpha Barry - 24034429
 """
 
 from __future__ import annotations
@@ -1296,7 +1297,7 @@ def export_reports_csv(city_name: str, days_back: int = None, apt_id: str = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MANAGER REPORTS - Code by alpha
+# MANAGER REPORTS - Alpha Barry - 24034429
 # ══════════════════════════════════════════════════════════════════════════════
 
 def add_city(name: str, address: str = None) -> str:
