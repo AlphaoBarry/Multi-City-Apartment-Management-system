@@ -172,6 +172,24 @@ PAMS includes a comprehensive test suite using `pytest`.
 <img width="1464" height="838" alt="Screenshot 2026-04-25 at 18 09 19" src="https://github.com/user-attachments/assets/93009def-79f5-4837-ba64-5a3585746152" />
 
 
+## Front Desk Page
+
+<img width="1460" height="902" alt="Screenshot 2026-04-25 at 18 12 38" src="https://github.com/user-attachments/assets/05fed593-c57e-46ff-a080-8da3eb28da06" />
+
+## Maintenance Page
+
+<img width="1447" height="692" alt="Screenshot 2026-04-25 at 18 13 56" src="https://github.com/user-attachments/assets/928cd4a1-c57b-4550-a414-bc680337418d" />
+
+## Finance Page
+
+<img width="1454" height="762" alt="Screenshot 2026-04-25 at 18 15 08" src="https://github.com/user-attachments/assets/d14a66d9-4fb1-4baf-8721-305b80de15b0" />
+
+## Admin Page
+
+<img width="1460" height="909" alt="Screenshot 2026-04-25 at 18 16 21" src="https://github.com/user-attachments/assets/5c28a8ac-4717-4a8f-be39-5401f8802150" />
+
+
+
 
 
 
