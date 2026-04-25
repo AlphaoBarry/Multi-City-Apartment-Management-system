@@ -25,7 +25,7 @@ from pages.manager_page import ManagerPage
 from pages.frontdesk_page import FrontDeskPage
 from pages.finance_page import FinancePage
 from pages.maintenance_page import MaintenancePage
-import mock_data as data
+
 from database.db_service import authenticate_user
 
 # Map db role codes to display role names used by sidebar / ROLE_PAGE_INDEX
@@ -233,6 +233,14 @@ class MainApp(QMainWindow):
             old = self.admin_page
             self.admin_page = AdminPage(parent=self, current_user=self.current_user)
             self.stacked_widget.insertWidget(1, self.admin_page)
+            self.stacked_widget.removeWidget(old)
+            old.deleteLater()
+
+        # Rebuild ManagerPage with fresh data and current_user on every login
+        if role == "Manager":
+            old = self.manager_page
+            self.manager_page = ManagerPage(parent=self, current_user=self.current_user)
+            self.stacked_widget.insertWidget(2, self.manager_page)
             self.stacked_widget.removeWidget(old)
             old.deleteLater()
 

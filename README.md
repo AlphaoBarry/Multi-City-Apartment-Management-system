@@ -7,16 +7,17 @@ A **PyQt5 desktop application** for managing multi-city apartment portfolios wit
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-pip install PyQt5
+# 1. Create & activate a virtual environment
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 
-# 2. Initialise Database & Seed Data
-python -m database.seed
+# 2. Install all dependencies
+pip install -r requirements.txt
 
 # 3. Run the application
 python app.py
 
-# 4. Run Test Suite
+# 4. (Optional) Run the test suite
 python -m pytest tests/
 ```
 

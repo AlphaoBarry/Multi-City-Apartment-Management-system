@@ -3,6 +3,7 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from pages.admin_page import CreateUserDialog, RegisterApartmentDialog, AssignLeaseDialog
 
+
 """
 Akande Bethel - 24039449
 """

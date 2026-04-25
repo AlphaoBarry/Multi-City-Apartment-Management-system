@@ -15,22 +15,25 @@ from database.db_service import (get_dashboard_stats, get_manager_occupancy_repo
                                  get_manager_financial_report, get_maintenance_cost_report,
                                  add_city, delete_city, get_cities, get_overdue_invoices, get_maintenance_tickets,
                                  get_recent_transactions, get_expenses, create_user, export_manager_reports_csv, get_users)
-import mock_data as data
+
 
 class ManagerPage(QWidget):
     """Manager dashboard — index 2 in MainApp stacked widget."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, current_user=None):
         super().__init__(parent)
         self.main_app = parent
+        self.current_user = current_user or {}
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # ── Sidebar ──────────────────────────────────────────────────────
+        first = self.current_user.get("first_name", "Jane")
+        last  = self.current_user.get("last_name",  "Manager")
         self.sidebar = Sidebar(
             role="Manager",
-            display_name=data.USERS.get("manager", {}).get("display_name", "Manager"),
+            display_name=f"{first} {last}".strip() or "Jane Manager",
         )
         self.sidebar.logout_signal.connect(self._logout)
         self.sidebar.page_changed.connect(self._on_page_changed)
@@ -706,7 +709,7 @@ class ManagerPage(QWidget):
         if file_path:
             try:
                 if not file_path.lower().endswith('.csv'): file_path += '.csv'
-                user_id = data.USERS.get("manager", {}).get("user_id")
+                user_id = self.current_user.get("user_id")
                 export_manager_reports_csv("Occupancy", file_path, city_id=city_id, operated_by=user_id)
                 QMessageBox.information(self, "Success", f"Occupancy report exported successfully to:\n{file_path}")
             except Exception as e:
@@ -718,7 +721,7 @@ class ManagerPage(QWidget):
         if file_path:
             try:
                 if not file_path.lower().endswith('.csv'): file_path += '.csv'
-                user_id = data.USERS.get("manager", {}).get("user_id")
+                user_id = self.current_user.get("user_id")
                 export_manager_reports_csv("Maintenance", file_path, operated_by=user_id)
                 QMessageBox.information(self, "Success", f"Maintenance report exported successfully to:\n{file_path}")
             except Exception as e:
@@ -730,7 +733,7 @@ class ManagerPage(QWidget):
         if file_path:
             try:
                 if not file_path.lower().endswith('.csv'): file_path += '.csv'
-                user_id = data.USERS.get("manager", {}).get("user_id")
+                user_id = self.current_user.get("user_id")
                 export_manager_reports_csv("Financial", file_path, operated_by=user_id)
                 QMessageBox.information(self, "Success", f"Financial report exported successfully to:\n{file_path}")
             except Exception as e:
