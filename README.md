@@ -158,3 +158,7 @@ PAMS includes a comprehensive test suite using `pytest`.
 - Lead architecture, Manager Page, and Database Integration.
 - Report Generation and report writting for element 1, 2 and 3.
 - Made the designs(Class Diagram, 3 Sequence Diagrams)
+
+# ScreenShots 
+## Login Page
+<img width="796" height="667" alt="Screenshot 2026-04-25 at 18 03 31" src="https://github.com/user-attachments/assets/f07de3ee-a33d-46ee-9b18-8d7194e7ed9c" />
