@@ -160,5 +160,19 @@ PAMS includes a comprehensive test suite using `pytest`.
 - Made the designs(Class Diagram, 3 Sequence Diagrams)
 
 # ScreenShots 
-## Login Page
+## Manager Page
 <img width="796" height="667" alt="Screenshot 2026-04-25 at 18 03 31" src="https://github.com/user-attachments/assets/f07de3ee-a33d-46ee-9b18-8d7194e7ed9c" />
+
+<img width="1443" height="891" alt="Screenshot 2026-04-25 at 18 08 23" src="https://github.com/user-attachments/assets/d9c089be-4841-4068-88f9-1c48fae2f0e4" />
+
+<img width="1447" height="751" alt="Screenshot 2026-04-25 at 18 08 40" src="https://github.com/user-attachments/assets/eac6178a-9803-4080-a77c-8d865fa4eb0f" />
+
+<img width="1453" height="885" alt="Screenshot 2026-04-25 at 18 09 01" src="https://github.com/user-attachments/assets/2b73d457-d554-4e1e-bde4-86d64008b5ae" />
+
+<img width="1464" height="838" alt="Screenshot 2026-04-25 at 18 09 19" src="https://github.com/user-attachments/assets/93009def-79f5-4837-ba64-5a3585746152" />
+
+
+
+
+
+
