@@ -1,4 +1,4 @@
-# PAMS — Property & Apartment Management System(SEE SCREENSHOTS OF SYSTEM BELLOW)
+# PAMS — Property & Apartment Management System(SEE SCREENSHOTS OF THE APP BELLOW)
 
 A **PyQt5 desktop application** for managing multi-city apartment portfolios with **persistent SQLite storage** and **city-scoped Role-Based Access Control (RBAC)**.
 
